@@ -1,1 +1,492 @@
-<h1>Savings Projector</h1>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="theme-color" content="#221f1a" />
+  <meta name="description" content="Savings & growth projector — two-income LA household, verified 2026 tax engine, mortgage capacity." />
+  <title>Savings &amp; Growth Projector</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <style>
+    html, body { margin: 0; padding: 0; background: #f4eee2; }
+    #root { min-height: 100vh; }
+  </style>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!--
+    Storage shim.
+    Inside the PWA shell the host injects `window.storage`, which persists to the
+    private-data-storage repository. That injected implementation always wins.
+    When this page is opened standalone (e.g. straight from GitHub Pages), we fall
+    back to localStorage so the calculator still remembers your inputs.
+  -->
+  <script>
+    if (!window.storage) {
+      window.storage = {
+        async get(key) {
+          try {
+            const value = localStorage.getItem(key);
+            return value == null ? null : { value };
+          } catch (e) { return null; }
+        },
+        async set(key, value) {
+          try { localStorage.setItem(key, value); } catch (e) {}
+        },
+        async delete(key) {
+          try { localStorage.removeItem(key); } catch (e) {}
+        },
+      };
+    }
+  </script>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect } = React;
+
+    /* ---------- Verified 2026 tax engine, single filer ---------- */
+    // Federal brackets — IRS Rev. Proc. 2025-32 (2026 tax year)
+    const FED = [
+      { upTo: 12400, rate: 0.10 }, { upTo: 50400, rate: 0.12 },
+      { upTo: 105700, rate: 0.22 }, { upTo: 201775, rate: 0.24 },
+      { upTo: 256225, rate: 0.32 }, { upTo: 640600, rate: 0.35 },
+      { upTo: Infinity, rate: 0.37 },
+    ];
+    // California brackets — latest published FTB single schedule
+    const CA = [
+      { upTo: 11079, rate: 0.01 }, { upTo: 26264, rate: 0.02 },
+      { upTo: 41452, rate: 0.04 }, { upTo: 57542, rate: 0.06 },
+      { upTo: 72724, rate: 0.08 }, { upTo: 371479, rate: 0.093 },
+      { upTo: 445771, rate: 0.103 }, { upTo: 742953, rate: 0.113 },
+      { upTo: Infinity, rate: 0.123 },
+    ];
+    const FED_STD = 16100, CA_STD = 5706, SS_CAP = 184500;
+    const bracket = (x, b, f) => {
+      let t = 0, prev = 0;
+      for (const { upTo, rate } of b) { const cap = upTo * f; if (x <= prev) break; t += (Math.min(x, cap) - prev) * rate; prev = cap; }
+      return t;
+    };
+    function personTax(wages, pretax, f) {
+      const fed = bracket(Math.max(0, wages - pretax - FED_STD * f), FED, f);
+      const ca = bracket(Math.max(0, wages - pretax - CA_STD * f), CA, f);
+      const ss = 0.062 * Math.min(wages, SS_CAP * f);
+      const medicare = 0.0145 * wages + 0.009 * Math.max(0, wages - 200000); // $200k threshold is not indexed
+      const sdi = 0.013 * wages; // CA SDI 2026, no wage cap
+      return fed + ca + ss + medicare + sdi;
+    }
+
+    const YOUR_401K = 24500, IRA = 7500; // 2026 IRS limits
+    const STORE_KEY = "savings_inputs_v2";
+
+    const fmt = (n) => (n < 0 ? "-$" : "$") + Math.abs(Math.round(n)).toLocaleString("en-US");
+    const fmtC = (n) => {
+      const s = n < 0 ? "-" : "", a = Math.abs(n);
+      if (a >= 1e6) return s + "$" + (a / 1e6).toFixed(2) + "M";
+      if (a >= 1e4) return s + "$" + Math.round(a / 1e3) + "k";
+      return s + "$" + Math.round(a).toLocaleString("en-US");
+    };
+    const fmtK = (n) => "$" + (Math.round(n / 100) / 10) + "k";
+
+    function computeYear(p, yr) {
+      const gY = Math.pow(1 + p.yourGrow / 100, yr - 1);
+      const gH = Math.pow(1 + p.herGrow / 100, yr - 1);
+      const eg = Math.pow(1 + p.expGrow / 100, yr - 1);
+      const f = Math.pow(1 + (p.infl || 0) / 100, yr - 1); // indexes brackets, deductions & contribution limits
+      const your401k = YOUR_401K * f, ira = IRA * f;
+      const base = p.base * gY, bonus = base * (p.bonusPct / 100), esop = p.esop * gY;
+      const herSal = p.herSal * gH;
+      const yourWages = base + bonus;
+      const her401k = herSal * 0.03, yourMatch = base * 0.04, herMatch = herSal * 0.03;
+      const yourTax = personTax(yourWages, your401k, f), herTax = personTax(herSal, her401k, f);
+      const takeHome = (yourWages - your401k - yourTax) + (herSal - her401k - herTax);
+      const fixed = p.fixed * eg, variable = p.varMo * 12 * eg, big = p.big * eg;
+      const spending = fixed + variable + big;
+      const liquid = takeHome - spending - ira;
+      const retirement = (your401k + yourMatch) + (her401k + herMatch) + esop + ira;
+      const totalSaved = retirement + liquid;
+      return { base, bonus, esop, herSal, fixed, variable, big, spending, liquid, retirement,
+        totalSaved, gross: yourWages + esop + herSal, tax: yourTax + herTax,
+        your401kTotal: your401k + yourMatch, her401kTotal: her401k + herMatch, ira };
+    }
+
+    /* smooth path through points */
+    function smooth(pts) {
+      if (pts.length < 2) return pts.length ? `M ${pts[0].x} ${pts[0].y}` : "";
+      let d = `M ${pts[0].x} ${pts[0].y}`;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+        d += ` C ${p1.x + (p2.x - p0.x) / 6} ${p1.y + (p2.y - p0.y) / 6}, ${p2.x - (p3.x - p1.x) / 6} ${p2.y - (p3.y - p1.y) / 6}, ${p2.x} ${p2.y}`;
+      }
+      return d;
+    }
+
+    const C = { paper: "#f4eee2", ink: "#221f1a", card: "#fffdf8", border: "#e8ddc9",
+      terra: "#bf5a2a", terraDk: "#a4481f", sage: "#4f8268", brass: "#b8893f", mute: "#8a7e6d", soft: "#b3a795" };
+
+    function Slider({ label, value, setValue, min, max, step, prefix, suffix, hint, tint }) {
+      const pct = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
+      const w = `${Math.max(2, String(value).length)}ch`;
+      return (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, gap: 8 }}>
+            <span style={{ fontSize: 11.5, letterSpacing: ".06em", textTransform: "uppercase", color: C.mute, fontWeight: 500 }}>{label}</span>
+            <span style={{ display: "inline-flex", alignItems: "baseline", fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 17, color: C.ink, whiteSpace: "nowrap" }}>
+              {prefix && <span>{prefix}</span>}
+              <input type="number" inputMode="decimal" value={value} step={step} min={0}
+                onChange={(e) => setValue(e.target.value === "" ? 0 : Number(e.target.value))}
+                style={{ width: w, minWidth: "2ch", fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 17, color: C.ink,
+                  border: "none", borderBottom: `1px dashed #d8ccb6`, background: "transparent", textAlign: "right", padding: "0 1px 1px", outline: "none" }} />
+              {suffix && <span style={{ color: C.mute, fontSize: 13, marginLeft: 2 }}>{suffix}</span>}
+            </span>
+          </div>
+          <input type="range" min={min} max={max} step={step} value={Math.min(Math.max(value, min), max)}
+            onChange={(e) => setValue(Number(e.target.value))}
+            style={{ width: "100%", height: 7, borderRadius: 8, appearance: "none", WebkitAppearance: "none", outline: "none",
+              background: `linear-gradient(90deg,${tint || C.terra} ${pct}%,#e6dccb ${pct}%)`, cursor: "pointer", boxShadow: "inset 0 1px 2px rgba(0,0,0,.06)" }} />
+          {hint && <div style={{ fontSize: 11, color: C.soft, marginTop: 4 }}>{hint}</div>}
+        </div>
+      );
+    }
+    function Toggle({ label, value, setValue, on, off }) {
+      return (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <span style={{ fontSize: 11.5, letterSpacing: ".06em", textTransform: "uppercase", color: C.mute, fontWeight: 500 }}>{label}</span>
+          <div style={{ display: "flex", background: "#efe7d7", borderRadius: 20, padding: 3 }}>
+            {[[true, on], [false, off]].map(([v, lab]) => (
+              <button key={lab} onClick={() => setValue(v)} style={{ border: "none", cursor: "pointer", borderRadius: 16,
+                padding: "5px 15px", fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", transition: "all .15s",
+                background: value === v ? C.terra : "transparent", color: value === v ? "#fffdf8" : C.mute }}>{lab}</button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    function Row({ label, value, bold, accent }) {
+      return (
+        <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #efe7d7",
+          fontWeight: bold ? 700 : 400, color: accent ? C.terra : "#3c352c", fontSize: bold ? 15 : 13.5 }}>
+          <span>{label}</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{value}</span>
+        </div>
+      );
+    }
+    function Section({ title, right, children, delay }) {
+      return (
+        <div className="rise" style={{ animationDelay: delay, background: C.card, border: `1px solid ${C.border}`,
+          borderRadius: 20, padding: "16px 18px 8px", margin: "14px 0", boxShadow: "0 2px 10px rgba(60,45,25,.05)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+            <span style={{ fontFamily: "Fraunces,serif", fontSize: 12.5, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", color: C.terra }}>{title}</span>
+            {right}
+          </div>
+          {children}
+        </div>
+      );
+    }
+
+    const DEFAULTS = { base: 160000, bonusPct: 30, esop: 30000, herSal: 80000, varMo: 3500, big: 0,
+      yourGrow: 4, herGrow: 3, expGrow: 3, invReturn: 6, years: 15, startRet: 0, startLiq: 0,
+      feRatio: 28, mortRate: 6.5, inclBonus: true, propTax: 1.25, insRate: 0.4, emFund: 50000, pmiRate: 0.6, infl: 2.7 };
+
+    function SavingsCalculator() {
+      const [s, setS] = useState(DEFAULTS);
+      const [hydrated, setHydrated] = useState(false);
+      const [saved, setSaved] = useState(false);
+      const set = (k) => (v) => setS((o) => ({ ...o, [k]: v }));
+
+      useEffect(() => {
+        (async () => {
+          try { const r = await window.storage.get(STORE_KEY); if (r && r.value) setS({ ...DEFAULTS, ...JSON.parse(r.value) }); }
+          catch (e) {}
+          setHydrated(true);
+        })();
+      }, []);
+      useEffect(() => {
+        if (!hydrated) return;
+        (async () => { try { await window.storage.set(STORE_KEY, JSON.stringify(s)); setSaved(true); setTimeout(() => setSaved(false), 1200); } catch (e) {} })();
+      }, [s, hydrated]);
+      const reset = async () => { setS(DEFAULTS); try { await window.storage.delete(STORE_KEY); } catch (e) {} };
+
+      const p = { ...s, fixed: 60000 };
+      const y1 = computeYear(p, 1);
+      const negative = y1.liquid < 0;
+
+      const r = s.mortRate / 100 / 12, n = 360;
+      const pmtFactor = r > 0 ? r / (1 - Math.pow(1 + r, -n)) : 1 / n; // monthly P&I per $1 of loan
+      const tiRate = (s.propTax + s.insRate) / 100 / 12; // monthly taxes+insurance per $1 of home value
+      const DOWN = 0.20; // conventional threshold below which PMI usually applies
+
+      const proj = [];
+      let retBal = s.startRet, liqBal = s.startLiq, contrib = s.startRet + s.startLiq;
+      for (let yr = 1; yr <= s.years; yr++) {
+        const cy = computeYear(p, yr);
+        retBal = retBal * (1 + s.invReturn / 100) + cy.retirement;
+        liqBal = liqBal * (1 + s.invReturn / 100) + cy.liquid;
+        contrib += cy.totalSaved;
+        const qualInc = cy.base + cy.herSal + (s.inclBonus ? cy.bonus : 0);
+        const maxPITI = (s.feRatio / 100) * qualInc / 12;
+        const down = Math.max(0, liqBal - s.emFund);     // put down everything above the e-fund
+        const pmiMoRate = s.pmiRate / 100 / 12;           // monthly PMI per $1 of loan
+        // first solve assuming no PMI
+        let loan = (maxPITI - tiRate * down) / (pmtFactor + tiRate);
+        let affordHome = loan >= 0 ? down + loan : maxPITI / tiRate;
+        let pmiMo = 0;
+        // if that puts you under 20% down, PMI applies — re-solve with PMI eating the budget
+        if (loan > 0 && down / affordHome < DOWN && pmiMoRate > 0) {
+          loan = (maxPITI - tiRate * down) / (pmtFactor + tiRate + pmiMoRate);
+          affordHome = down + loan;
+          pmiMo = pmiMoRate * loan;
+        }
+        if (loan < 0) loan = 0;
+        const pi = pmtFactor * loan, ti = tiRate * affordHome;
+        const downPct = affordHome > 0 ? down / affordHome : 0;
+        const pmiZone = pmiMo > 0;
+        proj.push({ yr, gross: cy.gross, tax: cy.tax, spending: cy.spending, retSaved: cy.retirement,
+          liqSaved: cy.liquid, bal: retBal + liqBal, retBalY: retBal, liqBalY: liqBal, contrib,
+          baseComb: cy.base + cy.herSal, qualInc, maxPITI, down, loan, affordHome, pi, ti, pmiMo, downPct, pmiZone });
+      }
+      const endBal = proj[proj.length - 1].bal, endRet = retBal, endLiq = liqBal;
+      const totalContrib = contrib, growth = endBal - totalContrib;
+
+      const m1 = proj[0], eY = proj[proj.length - 1];
+
+      /* chart */
+      const W = 480, H = 170, padX = 10, padY = 14;
+      const maxV = Math.max(...proj.map((d) => d.bal), 1);
+      const minV = Math.min(0, ...proj.map((d) => d.bal));
+      const sx = (i) => padX + (i / (proj.length - 1 || 1)) * (W - 2 * padX);
+      const sy = (v) => H - padY - ((v - minV) / (maxV - minV || 1)) * (H - 2 * padY);
+      const baseY = sy(minV);
+      const totPts = proj.map((d, i) => ({ x: sx(i), y: sy(d.bal) }));
+      const retPts = proj.map((d, i) => ({ x: sx(i), y: sy(d.retBalY) }));
+      const totLine = smooth(totPts), retLine = smooth(retPts);
+      const retArea = retLine + ` L ${retPts[retPts.length - 1].x} ${baseY} L ${retPts[0].x} ${baseY} Z`;
+      const retRev = [...retPts].reverse();
+      const liqArea = totLine + ` L ${retRev[0].x} ${retRev[0].y}` + smooth(retRev).replace(`M ${retRev[0].x} ${retRev[0].y}`, "") + " Z";
+      const ticks = [0, 1, 2, 3].map((k) => minV + ((maxV - minV) * k) / 3);
+      const last = totPts[totPts.length - 1];
+
+      return (
+        <div style={{ fontFamily: "'Libre Franklin',system-ui,sans-serif", color: C.ink, minHeight: "100vh",
+          position: "relative", padding: "24px 18px 44px", maxWidth: 540, margin: "0 auto",
+          background: `radial-gradient(120% 60% at 50% 0%, #faf6ec 0%, ${C.paper} 55%, #efe7d6 100%)` }}>
+          <style>{`@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Libre+Franklin:wght@400;500;600&display=swap');
+            *{box-sizing:border-box}
+            input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:24px;height:24px;border-radius:50%;background:#fffdf8;border:3px solid ${C.terra};box-shadow:0 2px 7px rgba(120,60,20,.3);cursor:pointer;transition:transform .12s}
+            input[type=range]::-webkit-slider-thumb:active{transform:scale(1.18)}
+            input[type=range]::-moz-range-thumb{width:24px;height:24px;border-radius:50%;background:#fffdf8;border:3px solid ${C.terra};cursor:pointer}
+            @keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+            @keyframes glow{0%,100%{box-shadow:0 14px 36px rgba(34,31,26,.22)}50%{box-shadow:0 14px 44px rgba(191,90,42,.30)}}
+            .rise{animation:rise .6s cubic-bezier(.2,.7,.2,1) both}
+            .noise{position:fixed;inset:0;pointer-events:none;opacity:.04;mix-blend-mode:multiply;z-index:50;
+              background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}`}</style>
+          <div className="noise" />
+
+          {/* Header */}
+          <div className="rise" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+            <div>
+              <div style={{ fontSize: 11, letterSpacing: ".22em", textTransform: "uppercase", color: C.brass, fontWeight: 600 }}>Los Angeles · Two Incomes</div>
+              <h1 style={{ fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 31, margin: "3px 0 0", lineHeight: 1.05, letterSpacing: "-.01em" }}>Savings <span style={{ fontStyle: "italic", color: C.terra }}>&amp;</span> Growth</h1>
+            </div>
+            <span style={{ fontSize: 10.5, color: saved ? C.sage : C.soft, marginTop: 26, fontWeight: 600, letterSpacing: ".04em",
+              border: `1px solid ${saved ? "#cfe0d4" : "#e6dccb"}`, borderRadius: 20, padding: "3px 9px", transition: "all .3s" }}>
+              {saved ? "✓ saved" : "auto-saves"}
+            </span>
+          </div>
+
+          {/* Hero */}
+          <div className="rise" style={{ animationDelay: ".05s", borderRadius: 22, padding: "20px 22px 18px", margin: "16px 0 6px",
+            position: "relative", overflow: "hidden", color: negative ? "#7a2a16" : "#f6efe2",
+            background: negative ? "linear-gradient(160deg,#f7ddd2,#f1c9b8)" : "linear-gradient(160deg,#322c24,#221f1a 70%)",
+            boxShadow: negative ? "0 12px 30px rgba(160,60,30,.18)" : "0 14px 36px rgba(34,31,26,.22)",
+            borderTop: `2px solid ${negative ? "#d98c6f" : "rgba(184,137,63,.5)"}` }}>
+            <div style={{ position: "absolute", right: -40, top: -40, width: 160, height: 160, borderRadius: "50%",
+              background: negative ? "rgba(191,90,42,.12)" : "rgba(184,137,63,.12)", filter: "blur(8px)" }} />
+            <div style={{ position: "relative" }}>
+              <div style={{ fontSize: 11, letterSpacing: ".14em", textTransform: "uppercase", opacity: .68, fontWeight: 600 }}>Saved · Year 1</div>
+              <div style={{ fontFamily: "Fraunces,serif", fontWeight: 700, fontSize: 46, lineHeight: 1, margin: "5px 0 6px", letterSpacing: "-.02em" }}>{fmt(y1.totalSaved)}</div>
+              <div style={{ display: "flex", gap: 14, fontSize: 13, opacity: .9, flexWrap: "wrap" }}>
+                <span><b style={{ fontFamily: "Fraunces,serif" }}>{((y1.totalSaved / y1.gross) * 100).toFixed(0)}%</b> savings rate</span>
+                <span>{fmtC(y1.retirement)} retirement</span>
+                <span>{fmtC(Math.max(y1.liquid, 0))} liquid</span>
+              </div>
+              {negative && <div style={{ marginTop: 9, fontSize: 13, fontWeight: 700 }}>⚠ Overspending take-home by {fmt(-y1.liquid)}</div>}
+            </div>
+          </div>
+
+          {/* Projection */}
+          <div className="rise" style={{ animationDelay: ".1s", background: C.card, borderRadius: 22, padding: "18px 20px 16px",
+            margin: "14px 0", border: `1px solid ${C.border}`, boxShadow: "0 4px 16px rgba(60,45,25,.06)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <div style={{ fontSize: 11.5, letterSpacing: ".1em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>Projected · year {s.years}</div>
+              <div style={{ fontSize: 12, color: C.mute }}>{fmtC(totalContrib)} in · <span style={{ color: C.sage, fontWeight: 600 }}>{fmtC(growth)} growth</span></div>
+            </div>
+            <div style={{ fontFamily: "Fraunces,serif", fontWeight: 700, fontSize: 38, lineHeight: 1.02, margin: "3px 0 12px", color: C.terra, letterSpacing: "-.02em" }}>{fmtC(endBal)}</div>
+
+            <div style={{ display: "flex", gap: 9, marginBottom: 14 }}>
+              {[["Retirement", endRet, C.sage], ["Liquid", endLiq, C.terra]].map(([lab, val, col]) => (
+                <div key={lab} style={{ flex: 1, background: "#f6efe2", borderRadius: 12, padding: "9px 13px", borderLeft: `3px solid ${col}` }}>
+                  <div style={{ fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>{lab}</div>
+                  <div style={{ fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 20, color: col }}>{fmtC(val)}</div>
+                </div>
+              ))}
+            </div>
+
+            <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block", overflow: "visible" }}>
+              <defs>
+                <linearGradient id="ret" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={C.sage} stopOpacity="0.42" />
+                  <stop offset="100%" stopColor={C.sage} stopOpacity="0.12" />
+                </linearGradient>
+                <linearGradient id="liq" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={C.terra} stopOpacity="0.40" />
+                  <stop offset="100%" stopColor={C.terra} stopOpacity="0.10" />
+                </linearGradient>
+              </defs>
+              {ticks.map((v, i) => (
+                <g key={i}>
+                  <line x1={padX} y1={sy(v)} x2={W - padX} y2={sy(v)} stroke="#e8ddc9" strokeWidth="1" />
+                  <text x={padX} y={sy(v) - 4} fontSize="9.5" fill={C.soft} fontFamily="Libre Franklin">{fmtC(v)}</text>
+                </g>
+              ))}
+              <path d={liqArea} fill="url(#liq)" />
+              <path d={retArea} fill="url(#ret)" />
+              <path d={retLine} fill="none" stroke={C.sage} strokeWidth="2" strokeLinecap="round" />
+              <path d={totLine} fill="none" stroke={C.terra} strokeWidth="2.6" strokeLinecap="round" />
+              <circle cx={last.x} cy={last.y} r="4.5" fill={C.terra} stroke="#fffdf8" strokeWidth="2" />
+            </svg>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: C.soft, margin: "2px 2px 8px" }}>
+              <span>Yr 1</span><span>Yr {Math.ceil(s.years / 2)}</span><span>Yr {s.years}</span>
+            </div>
+            <div style={{ display: "flex", gap: 18, fontSize: 11.5, color: C.mute }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 12, height: 12, background: C.sage, borderRadius: 3, opacity: .85 }} /> retirement</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 12, height: 12, background: C.terra, borderRadius: 3, opacity: .85 }} /> liquid</span>
+              <span style={{ color: C.soft }}>· {s.invReturn}% return</span>
+            </div>
+          </div>
+
+          <Section title="Income" delay=".12s">
+            <Slider label="Your base" value={s.base} setValue={set("base")} min={50000} max={400000} step={5000} prefix="$" />
+            <Slider label="Your bonus %" value={s.bonusPct} setValue={set("bonusPct")} min={0} max={60} step={1} suffix="%" hint={"= " + fmt(s.base * s.bonusPct / 100) + " bonus"} />
+            <Slider label="Your ESOP" value={s.esop} setValue={set("esop")} min={0} max={80000} step={1000} prefix="$" tint={C.sage} />
+            <Slider label="Her salary" value={s.herSal} setValue={set("herSal")} min={0} max={250000} step={5000} prefix="$" />
+          </Section>
+
+          <Section title="Growth · per person" delay=".14s">
+            <Slider label="Your income growth / yr" value={s.yourGrow} setValue={set("yourGrow")} min={0} max={12} step={0.5} suffix="%" tint={C.brass} />
+            <Slider label="Her income growth / yr" value={s.herGrow} setValue={set("herGrow")} min={0} max={12} step={0.5} suffix="%" tint={C.brass} />
+          </Section>
+
+          <Section title="Spending" delay=".16s">
+            <Slider label="Variable / month" value={s.varMo} setValue={set("varMo")} min={0} max={12000} step={100} prefix="$" suffix="/mo" />
+            <Slider label="Big purchases / year" value={s.big} setValue={set("big")} min={0} max={60000} step={500} prefix="$" />
+            <Slider label="Expense growth / yr" value={s.expGrow} setValue={set("expGrow")} min={0} max={10} step={0.5} suffix="%" tint={C.brass} />
+            <div style={{ fontSize: 11.5, color: C.soft, margin: "-2px 0 6px" }}>Fixed costs held at $5,000/mo ($60k/yr).</div>
+          </Section>
+
+          <Section title="Starting balances · projection" delay=".18s">
+            <Slider label="Starting retirement balance" value={s.startRet} setValue={set("startRet")} min={0} max={2000000} step={25000} prefix="$" tint={C.sage} />
+            <Slider label="Starting liquid balance" value={s.startLiq} setValue={set("startLiq")} min={0} max={1000000} step={10000} prefix="$" />
+            <Slider label="Investment return / yr" value={s.invReturn} setValue={set("invReturn")} min={0} max={12} step={0.5} suffix="%" tint={C.brass} />
+            <Slider label="Inflation (indexes tax & limits)" value={s.infl} setValue={set("infl")} min={0} max={6} step={0.1} suffix="%" tint={C.brass} />
+            <Slider label="Years to project" value={s.years} setValue={set("years")} min={1} max={30} step={1} suffix="yrs" />
+          </Section>
+
+          <Section title="Base income · mortgage capacity" delay=".19s">
+            <div style={{ display: "flex", gap: 9, marginBottom: 14 }}>
+              <div style={{ flex: 1, background: "#f6efe2", borderRadius: 12, padding: "9px 13px", borderLeft: `3px solid ${C.brass}` }}>
+                <div style={{ fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>Qualifying · Yr 1</div>
+                <div style={{ fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 20, color: C.ink }}>{fmt(m1.qualInc)}</div>
+                <div style={{ fontSize: 10.5, color: C.soft }}>{s.inclBonus ? "base + bonus" : "base only"}</div>
+              </div>
+              <div style={{ flex: 1, background: "#f6efe2", borderRadius: 12, padding: "9px 13px", borderLeft: `3px solid ${C.terra}` }}>
+                <div style={{ fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>Max PITI / mo</div>
+                <div style={{ fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 20, color: C.terra }}>{fmt(m1.maxPITI)}</div>
+                <div style={{ fontSize: 10.5, color: C.soft }}>{fmtC(m1.pi)} P&amp;I + {fmtC(m1.ti)} tax/ins{m1.pmiMo > 0 ? ` + ${fmtC(m1.pmiMo)} PMI` : ""}</div>
+              </div>
+            </div>
+            <Toggle label="Count bonus as income" value={s.inclBonus} setValue={set("inclBonus")} on="With bonus" off="Base only" />
+            <Slider label="Lender front-end ratio" value={s.feRatio} setValue={set("feRatio")} min={20} max={40} step={1} suffix="% of gross" tint={C.brass} />
+            <Slider label="Mortgage rate (30-yr)" value={s.mortRate} setValue={set("mortRate")} min={2.5} max={9.5} step={0.125} suffix="%" tint={C.brass} />
+            <Slider label="Property tax / yr" value={s.propTax} setValue={set("propTax")} min={0.5} max={2.5} step={0.05} suffix="% of value" tint={C.brass} />
+            <Slider label="Insurance / yr" value={s.insRate} setValue={set("insRate")} min={0.1} max={1.5} step={0.05} suffix="% of value" tint={C.brass} />
+            <Slider label="PMI rate (if under 20%)" value={s.pmiRate} setValue={set("pmiRate")} min={0} max={1.5} step={0.05} suffix="% of loan / yr" tint={C.brass} />
+            <Slider label="Emergency fund to keep" value={s.emFund} setValue={set("emFund")} min={0} max={250000} step={5000} prefix="$" tint={C.sage} />
+            <div style={{ background: C.ink, color: "#f6efe2", borderRadius: 14, padding: "13px 16px", margin: "4px 0 8px" }}>
+              <div style={{ fontSize: 11, letterSpacing: ".1em", textTransform: "uppercase", opacity: .65, fontWeight: 600 }}>Affordable by year {s.years}</div>
+              <div style={{ fontFamily: "Fraunces,serif", fontWeight: 700, fontSize: 30, lineHeight: 1.05, margin: "2px 0 4px" }}>{fmtC(eY.affordHome)}</div>
+              <div style={{ fontSize: 12.5, opacity: .85 }}>
+                {fmtC(eY.down)} down ({(eY.downPct * 100).toFixed(0)}%) + {fmtC(eY.loan)} loan
+                {eY.pmiZone && <span style={{ color: "#f0b89e" }}> · {fmtC(eY.pmiMo)}/mo PMI</span>}
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: C.soft, lineHeight: 1.5 }}>Assumes you put down all liquid above your {fmtC(s.emFund)} emergency fund, then borrow the most income supports (full PITI within {s.feRatio}%, with PMI added when down is under 20%). Retirement/ESOP aren't counted toward the down payment; HOA isn't included. A lender pre-approval is the real test.</div>
+          </Section>
+
+          <Section title="Year by year" delay=".2s"
+            right={<button onClick={reset} style={{ fontSize: 11, color: C.terra, background: "none", border: `1px solid #e3c6b4`, borderRadius: 20, padding: "4px 13px", cursor: "pointer", fontWeight: 600, letterSpacing: ".03em" }}>Reset all</button>}>
+            <div style={{ overflowX: "auto", borderRadius: 12, border: `1px solid ${C.border}`, margin: "0 0 8px" }}>
+              <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 880, fontSize: 11.5, fontVariantNumeric: "tabular-nums" }}>
+                <thead>
+                  <tr style={{ background: C.ink, color: "#f6efe2" }}>
+                    {["Yr", "Base", "Gross", "Taxes", "Spending", "Retire", "Liquid", "Balance", "PITI/mo", "Afford"].map((h, i) => (
+                      <th key={h} style={{ padding: "9px 9px", textAlign: i ? "right" : "left", fontWeight: 600, whiteSpace: "nowrap", letterSpacing: ".02em" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {proj.map((d, i) => (
+                    <tr key={d.yr} style={{ background: i % 2 ? "#faf5ea" : "#fffdf8" }}>
+                      <td style={{ padding: "7px 9px", fontWeight: 700, color: C.brass }}>{d.yr}</td>
+                      <td style={{ padding: "7px 9px", textAlign: "right" }}>{fmtC(d.baseComb)}</td>
+                      <td style={{ padding: "7px 9px", textAlign: "right" }}>{fmtC(d.gross)}</td>
+                      <td style={{ padding: "7px 9px", textAlign: "right", color: C.soft }}>{fmtC(d.tax)}</td>
+                      <td style={{ padding: "7px 9px", textAlign: "right" }}>{fmtC(d.spending)}</td>
+                      <td style={{ padding: "7px 9px", textAlign: "right", color: C.sage, fontWeight: 600 }}>{fmtC(d.retSaved)}</td>
+                      <td style={{ padding: "7px 9px", textAlign: "right", color: d.liqSaved < 0 ? "#a23a1e" : "#3c352c", fontWeight: 600 }}>{fmtC(d.liqSaved)}</td>
+                      <td style={{ padding: "7px 9px", textAlign: "right", color: C.terra, fontWeight: 700 }}>{fmtC(d.bal)}</td>
+                      <td style={{ padding: "7px 9px", textAlign: "right", color: C.ink }}>{fmtC(d.maxPITI)}</td>
+                      <td style={{ padding: "7px 9px", textAlign: "right", fontWeight: 700, color: d.pmiZone ? C.terra : C.sage }} title={d.pmiZone ? `down ${(d.downPct * 100).toFixed(0)}% — under 20%, PMI likely` : `down ${(d.downPct * 100).toFixed(0)}%`}>{fmtC(d.affordHome)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ fontSize: 11, color: C.soft }}>Scroll sideways for all columns. PITI/mo = full housing payment income supports; Afford = home you can buy that year (all liquid above the e-fund down + income-supported loan) — <span style={{ color: C.sage, fontWeight: 600 }}>green</span> = 20%+ down, <span style={{ color: C.terra, fontWeight: 600 }}>orange</span> = under 20%, PMI included. Tip: tap any value above to type an exact number.</div>
+          </Section>
+
+          <Section title="Year 1 detail" delay=".22s">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+              <div>
+                <div style={{ fontFamily: "Fraunces,serif", fontSize: 14, fontWeight: 600, marginBottom: 4, color: C.mute }}>Spending</div>
+                <Row label="Fixed" value={fmt(y1.fixed)} />
+                <Row label="Variable" value={fmt(y1.variable)} />
+                <Row label="Big buys" value={fmt(y1.big)} />
+                <Row label="Total" value={fmt(y1.spending)} bold />
+              </div>
+              <div>
+                <div style={{ fontFamily: "Fraunces,serif", fontSize: 14, fontWeight: 600, marginBottom: 4, color: C.mute }}>Saving</div>
+                <Row label="Your 401k+match" value={fmt(y1.your401kTotal)} />
+                <Row label="Her 401k+match" value={fmt(y1.her401kTotal)} />
+                <Row label="ESOP" value={fmt(y1.esop)} />
+                <Row label="IRA (backdoor)" value={fmt(y1.ira)} />
+                <Row label="Liquid / cash" value={fmt(y1.liquid)} accent={negative} />
+                <Row label="Total" value={fmt(y1.totalSaved)} bold />
+              </div>
+            </div>
+          </Section>
+
+          <div style={{ fontSize: 11, color: C.soft, lineHeight: 1.55, padding: "4px 4px 0" }}>
+            Tax engine uses verified 2026 figures: IRS Rev. Proc. 2025-32 federal brackets, $16,100 standard deduction, $184,500 Social Security wage base, 1.45% + 0.9% Medicare, and $24,500 401(k) / $7,500 IRA limits — plus California's latest FTB single brackets, $5,706 standard deduction, and 1.3% SDI (no cap). Each spouse files single. Brackets and limits index by your inflation rate across the projection, so there's no artificial bracket creep. Not modeled: itemized deductions (e.g. mortgage interest & property tax once you own), pre-tax benefits like health premiums or HSA, and exact 2026 CA brackets (FTB finalizes those later). Inputs auto-save here but don't carry into a separate chat. Planning math — your actual tax return and a lender pre-approval are the real tests.
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<SavingsCalculator />);
+  </script>
+</body>
+</html>
