@@ -110,6 +110,7 @@
       const totalSaved = retirement + liquid;
       return { base, bonus, esop, herSal, fixed, variable, big, spending, liquid, retirement,
         totalSaved, gross: yourWages + esop + herSal, tax: yourTax + herTax,
+        yourInc: yourWages + esop, herInc: herSal, yourTax, herTax,
         your401kTotal: your401k + yourMatch, her401kTotal: her401k + herMatch, ira };
     }
 
@@ -243,9 +244,11 @@
         const pi = pmtFactor * loan, ti = tiRate * affordHome;
         const downPct = affordHome > 0 ? down / affordHome : 0;
         const pmiZone = pmiMo > 0;
-        proj.push({ yr, gross: cy.gross, tax: cy.tax, spending: cy.spending, retSaved: cy.retirement,
-          liqSaved: cy.liquid, bal: retBal + liqBal, retBalY: retBal, liqBalY: liqBal, contrib,
-          baseComb: cy.base + cy.herSal, qualInc, maxPITI, down, loan, affordHome, pi, ti, pmiMo, downPct, pmiZone });
+        proj.push({ yr, yourInc: cy.yourInc, herInc: cy.herInc, gross: cy.gross,
+          yourTax: cy.yourTax, herTax: cy.herTax, tax: cy.tax, spending: cy.spending,
+          liqSaved: cy.liquid, retSaved: cy.retirement, savedTot: cy.totalSaved,
+          bal: retBal + liqBal, retBalY: retBal, liqBalY: liqBal, contrib,
+          qualInc, maxPITI, down, loan, affordHome, pi, ti, pmiMo, downPct, pmiZone });
       }
       const endBal = proj[proj.length - 1].bal, endRet = retBal, endLiq = liqBal;
       const totalContrib = contrib, growth = endBal - totalContrib;
@@ -267,6 +270,16 @@
       const liqArea = totLine + ` L ${retRev[0].x} ${retRev[0].y}` + smooth(retRev).replace(`M ${retRev[0].x} ${retRev[0].y}`, "") + " Z";
       const ticks = [0, 1, 2, 3].map((k) => minV + ((maxV - minV) * k) / 3);
       const last = totPts[totPts.length - 1];
+
+      /* year-by-year table styling helpers (grouped header) */
+      const HDIV = "1px solid rgba(246,239,226,.16)", BDIV = "1px solid #ece1cd";
+      const grp = (color, div) => ({ padding: "7px 9px 5px", textAlign: "center", fontWeight: 700, color,
+        letterSpacing: ".1em", textTransform: "uppercase", fontSize: 10.5,
+        borderLeft: div ? HDIV : "none", borderBottom: "1px solid rgba(246,239,226,.12)" });
+      const sub = (div) => ({ padding: "5px 9px 7px", textAlign: "right", fontWeight: 600,
+        whiteSpace: "nowrap", borderLeft: div ? HDIV : "none" });
+      const bc = (extra, div) => ({ padding: "7px 8px", textAlign: "right",
+        borderLeft: div ? BDIV : "none", ...(extra || {}) });
 
       return (
         <div style={{ fontFamily: "'Libre Franklin',system-ui,sans-serif", color: C.ink, minHeight: "100vh",
@@ -428,54 +441,50 @@
           <Section title="Year by year" delay=".2s"
             right={<button onClick={reset} style={{ fontSize: 11, color: C.terra, background: "none", border: `1px solid #e3c6b4`, borderRadius: 20, padding: "4px 13px", cursor: "pointer", fontWeight: 600, letterSpacing: ".03em" }}>Reset all</button>}>
             <div style={{ overflowX: "auto", borderRadius: 12, border: `1px solid ${C.border}`, margin: "0 0 8px" }}>
-              <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 880, fontSize: 11.5, fontVariantNumeric: "tabular-nums" }}>
+              <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 1100, fontSize: 11.5, fontVariantNumeric: "tabular-nums" }}>
                 <thead>
                   <tr style={{ background: C.ink, color: "#f6efe2" }}>
-                    {["Yr", "Base", "Gross", "Taxes", "Spending", "Retire", "Liquid", "Balance", "PITI/mo", "Afford"].map((h, i) => (
-                      <th key={h} style={{ padding: "9px 9px", textAlign: i ? "right" : "left", fontWeight: 600, whiteSpace: "nowrap", letterSpacing: ".02em" }}>{h}</th>
-                    ))}
+                    <th rowSpan={2} style={{ padding: "8px 9px", textAlign: "left", fontWeight: 600, verticalAlign: "bottom", letterSpacing: ".02em" }}>Yr</th>
+                    <th colSpan={3} style={grp(C.brass)}>Income</th>
+                    <th colSpan={3} style={grp(C.terra, true)}>Taxes</th>
+                    <th rowSpan={2} style={{ padding: "8px 9px", textAlign: "right", fontWeight: 600, verticalAlign: "bottom", whiteSpace: "nowrap", borderLeft: HDIV }}>Spending</th>
+                    <th colSpan={3} style={grp(C.sage, true)}>Savings</th>
+                    <th colSpan={3} style={grp(C.terra, true)}>Balance</th>
+                    <th colSpan={2} style={grp(C.brass, true)}>Housing</th>
+                  </tr>
+                  <tr style={{ background: "#2c2820", color: "#cdbfa6" }}>
+                    <th style={sub()}>You</th><th style={sub()}>Her</th><th style={sub()}>Total</th>
+                    <th style={sub(true)}>You</th><th style={sub()}>Her</th><th style={sub()}>Total</th>
+                    <th style={sub(true)}>Liquid</th><th style={sub()}>Retire</th><th style={sub()}>Total</th>
+                    <th style={sub(true)}>Liquid</th><th style={sub()}>Retire</th><th style={sub()}>Total</th>
+                    <th style={sub(true)}>PITI/mo</th><th style={sub()}>Afford</th>
                   </tr>
                 </thead>
                 <tbody>
                   {proj.map((d, i) => (
                     <tr key={d.yr} style={{ background: i % 2 ? "#faf5ea" : "#fffdf8" }}>
                       <td style={{ padding: "7px 9px", fontWeight: 700, color: C.brass }}>{d.yr}</td>
-                      <td style={{ padding: "7px 9px", textAlign: "right" }}>{fmtC(d.baseComb)}</td>
-                      <td style={{ padding: "7px 9px", textAlign: "right" }}>{fmtC(d.gross)}</td>
-                      <td style={{ padding: "7px 9px", textAlign: "right", color: C.soft }}>{fmtC(d.tax)}</td>
-                      <td style={{ padding: "7px 9px", textAlign: "right" }}>{fmtC(d.spending)}</td>
-                      <td style={{ padding: "7px 9px", textAlign: "right", color: C.sage, fontWeight: 600 }}>{fmtC(d.retSaved)}</td>
-                      <td style={{ padding: "7px 9px", textAlign: "right", color: d.liqSaved < 0 ? "#a23a1e" : "#3c352c", fontWeight: 600 }}>{fmtC(d.liqSaved)}</td>
-                      <td style={{ padding: "7px 9px", textAlign: "right", color: C.terra, fontWeight: 700 }}>{fmtC(d.bal)}</td>
-                      <td style={{ padding: "7px 9px", textAlign: "right", color: C.ink }}>{fmtC(d.maxPITI)}</td>
-                      <td style={{ padding: "7px 9px", textAlign: "right", fontWeight: 700, color: d.pmiZone ? C.terra : C.sage }} title={d.pmiZone ? `down ${(d.downPct * 100).toFixed(0)}% — under 20%, PMI likely` : `down ${(d.downPct * 100).toFixed(0)}%`}>{fmtC(d.affordHome)}</td>
+                      <td style={bc()}>{fmtC(d.yourInc)}</td>
+                      <td style={bc()}>{fmtC(d.herInc)}</td>
+                      <td style={bc({ fontWeight: 700, color: C.ink })}>{fmtC(d.gross)}</td>
+                      <td style={bc({ color: C.soft }, true)}>{fmtC(d.yourTax)}</td>
+                      <td style={bc({ color: C.soft })}>{fmtC(d.herTax)}</td>
+                      <td style={bc({ color: "#7a6f5e", fontWeight: 700 })}>{fmtC(d.tax)}</td>
+                      <td style={bc({}, true)}>{fmtC(d.spending)}</td>
+                      <td style={bc({ color: d.liqSaved < 0 ? "#a23a1e" : "#3c352c", fontWeight: 600 }, true)}>{fmtC(d.liqSaved)}</td>
+                      <td style={bc({ color: C.sage, fontWeight: 600 })}>{fmtC(d.retSaved)}</td>
+                      <td style={bc({ fontWeight: 700, color: C.ink })}>{fmtC(d.savedTot)}</td>
+                      <td style={bc({ color: C.mute }, true)}>{fmtC(d.liqBalY)}</td>
+                      <td style={bc({ color: C.sage })}>{fmtC(d.retBalY)}</td>
+                      <td style={bc({ color: C.terra, fontWeight: 700 })}>{fmtC(d.bal)}</td>
+                      <td style={bc({ color: C.ink }, true)}>{fmtC(d.maxPITI)}</td>
+                      <td style={bc({ fontWeight: 700, color: d.pmiZone ? C.terra : C.sage })} title={d.pmiZone ? `down ${(d.downPct * 100).toFixed(0)}% — under 20%, PMI likely` : `down ${(d.downPct * 100).toFixed(0)}%`}>{fmtC(d.affordHome)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div style={{ fontSize: 11, color: C.soft }}>Scroll sideways for all columns. PITI/mo = full housing payment income supports; Afford = home you can buy that year (all liquid above the e-fund down + income-supported loan) — <span style={{ color: C.sage, fontWeight: 600 }}>green</span> = 20%+ down, <span style={{ color: C.terra, fontWeight: 600 }}>orange</span> = under 20%, PMI included. Tip: tap any value above to type an exact number.</div>
-          </Section>
-
-          <Section title="Year 1 detail" delay=".22s">
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-              <div>
-                <div style={{ fontFamily: "Fraunces,serif", fontSize: 14, fontWeight: 600, marginBottom: 4, color: C.mute }}>Spending</div>
-                <Row label="Fixed" value={fmt(y1.fixed)} />
-                <Row label="Variable" value={fmt(y1.variable)} />
-                <Row label="Big buys" value={fmt(y1.big)} />
-                <Row label="Total" value={fmt(y1.spending)} bold />
-              </div>
-              <div>
-                <div style={{ fontFamily: "Fraunces,serif", fontSize: 14, fontWeight: 600, marginBottom: 4, color: C.mute }}>Saving</div>
-                <Row label="Your 401k+match" value={fmt(y1.your401kTotal)} />
-                <Row label="Her 401k+match" value={fmt(y1.her401kTotal)} />
-                <Row label="ESOP" value={fmt(y1.esop)} />
-                <Row label="IRA (backdoor)" value={fmt(y1.ira)} />
-                <Row label="Liquid / cash" value={fmt(y1.liquid)} accent={negative} />
-                <Row label="Total" value={fmt(y1.totalSaved)} bold />
-              </div>
-            </div>
+            <div style={{ fontSize: 11, color: C.soft }}>Scroll sideways for all groups. <b>Income</b> &amp; <b>Taxes</b> are split per person, then totaled. <b>Savings</b> = what you add that year (liquid + retirement); <b>Balance</b> = running total after that year's growth and contributions. <b>PITI/mo</b> = full housing payment income supports; <b>Afford</b> = home you can buy that year (all liquid above the e-fund as down + income-supported loan) — <span style={{ color: C.sage, fontWeight: 600 }}>green</span> = 20%+ down, <span style={{ color: C.terra, fontWeight: 600 }}>orange</span> = under 20%, PMI included. Tip: tap any input above to type an exact number.</div>
           </Section>
 
           <div style={{ fontSize: 11, color: C.soft, lineHeight: 1.55, padding: "4px 4px 0" }}>
