@@ -79,8 +79,19 @@
       return fed + ca + ss + medicare + sdi;
     }
 
-    const YOUR_401K = 24500, IRA = 7500; // 2026 IRS limits
+    const YOUR_401K = 24500, IRA = 7500, LIMIT_415C = 72000; // 2026 IRS limits (elective deferral / IRA / DC annual additions)
     const STORE_KEY = "savings_inputs_v2";
+
+    /* Per-year override / "raise" engine.
+       A pin sets an absolute value at a given year; from that year forward the
+       trajectory re-bases off the pinned value and resumes compounding at the
+       field's growth rate (growth = 0 for percentage fields like bonus %).
+       Years before the first pin keep the slider value anchored at year 1. */
+    function pinnedLevel(defaultVal, growthPct, yr, pins) {
+      let anchorYr = 1, anchorVal = defaultVal;
+      for (const p of pins) { if (p.year <= yr && p.year >= anchorYr) { anchorYr = p.year; anchorVal = p.value; } }
+      return anchorVal * Math.pow(1 + growthPct / 100, yr - anchorYr);
+    }
 
     const fmt = (n) => (n < 0 ? "-$" : "$") + Math.abs(Math.round(n)).toLocaleString("en-US");
     const fmtC = (n) => {
@@ -92,26 +103,38 @@
     const fmtK = (n) => "$" + (Math.round(n / 100) / 10) + "k";
 
     function computeYear(p, yr) {
-      const gY = Math.pow(1 + p.yourGrow / 100, yr - 1);
-      const gH = Math.pow(1 + p.herGrow / 100, yr - 1);
       const eg = Math.pow(1 + p.expGrow / 100, yr - 1);
       const f = Math.pow(1 + (p.infl || 0) / 100, yr - 1); // indexes brackets, deductions & contribution limits
-      const your401k = YOUR_401K * f, ira = IRA * f;
-      const base = p.base * gY, bonus = base * (p.bonusPct / 100), esop = p.esop * gY;
-      const herSal = p.herSal * gH;
-      const yourWages = base + bonus;
-      const her401k = herSal * 0.03, yourMatch = base * 0.04, herMatch = herSal * 0.03;
-      const yourTax = personTax(yourWages, your401k, f), herTax = personTax(herSal, her401k, f);
-      const takeHome = (yourWages - your401k - yourTax) + (herSal - her401k - herTax);
+      const your401k = YOUR_401K * f, ira = IRA * f, cap415 = LIMIT_415C * f;
+
+      // resolve each field through any per-year pins (overrides)
+      const ov = p.overrides || [];
+      const pins = (field) => ov.filter((o) => o.field === field && Number(o.year) >= 1)
+        .map((o) => ({ year: Number(o.year), value: Number(o.value) })).sort((a, b) => a.year - b.year);
+      const base = pinnedLevel(p.base, p.yourGrow, yr, pins("base"));       // $ level, grows
+      const bonusPct = pinnedLevel(p.bonusPct, 0, yr, pins("bonus"));        // % rate, flat until next pin
+      const esop = pinnedLevel(p.esop, p.yourGrow, yr, pins("esop"));        // $ level, grows
+      const herSal = pinnedLevel(p.herSal, p.herGrow, yr, pins("herSal"));   // $ level, grows
+      const herBonusPct = pinnedLevel(p.herBonusPct || 0, 0, yr, pins("herBonus")); // % rate
+
+      const bonus = base * (bonusPct / 100), herBonus = herSal * (herBonusPct / 100);
+      const yourWages = base + bonus, herWages = herSal + herBonus;
+      const her401k = herSal * 0.03, yourMatch = base * 0.04, herMatch = herSal * 0.03; // match on base salary
+      const yourTax = personTax(yourWages, your401k, f), herTax = personTax(herWages, her401k, f);
+      const takeHome = (yourWages - your401k - yourTax) + (herWages - her401k - herTax);
       const fixed = p.fixed * eg, variable = p.varMo * 12 * eg, big = p.big * eg;
       const spending = fixed + variable + big;
+      // §415(c) annual-additions cap: employee deferral + employer match + ESOP can't exceed the limit
+      const yourAddRaw = your401k + yourMatch + esop, herAddRaw = her401k + herMatch;
+      const yourAdd = Math.min(yourAddRaw, cap415), herAdd = Math.min(herAddRaw, cap415);
+      const capHit = yourAddRaw > cap415 || herAddRaw > cap415;
       const liquid = takeHome - spending - ira;
-      const retirement = (your401k + yourMatch) + (her401k + herMatch) + esop + ira;
+      const retirement = yourAdd + herAdd + ira;
       const totalSaved = retirement + liquid;
-      return { base, bonus, esop, herSal, fixed, variable, big, spending, liquid, retirement,
-        totalSaved, gross: yourWages + esop + herSal, tax: yourTax + herTax,
-        yourInc: yourWages + esop, herInc: herSal, yourTax, herTax,
-        your401kTotal: your401k + yourMatch, her401kTotal: her401k + herMatch, ira };
+      return { base, bonus, esop, herSal, herBonus, fixed, variable, big, spending, liquid, retirement,
+        totalSaved, gross: yourWages + esop + herWages, tax: yourTax + herTax,
+        yourInc: yourWages + esop, herInc: herWages, yourTax, herTax,
+        your401kTotal: yourAdd, her401kTotal: herAdd, ira, capHit };
     }
 
     /* smooth path through points */
@@ -187,9 +210,19 @@
       );
     }
 
-    const DEFAULTS = { base: 160000, bonusPct: 30, esop: 30000, herSal: 80000, varMo: 3500, big: 0,
+    const DEFAULTS = { base: 160000, bonusPct: 30, esop: 30000, herSal: 80000, herBonusPct: 0, varMo: 3500, big: 0,
       yourGrow: 4, herGrow: 3, expGrow: 3, invReturn: 6, years: 15, startRet: 0, startLiq: 0,
-      feRatio: 28, mortRate: 6.5, inclBonus: true, propTax: 1.25, insRate: 0.4, emFund: 50000, pmiRate: 0.6, infl: 2.7 };
+      feRatio: 28, mortRate: 6.5, inclBonus: true, propTax: 1.25, insRate: 0.4, emFund: 50000, pmiRate: 0.6, infl: 2.7,
+      overrides: [] };
+
+    // override field catalog — label, whether it's a % rate, and a value formatter
+    const OV_FIELDS = {
+      base:     { label: "Your base",   pct: false },
+      bonus:    { label: "Your bonus",  pct: true },
+      esop:     { label: "Your ESOP",   pct: false },
+      herSal:   { label: "Her salary",  pct: false },
+      herBonus: { label: "Her bonus",   pct: true },
+    };
 
     function SavingsCalculator() {
       const [s, setS] = useState(DEFAULTS);
@@ -210,6 +243,13 @@
       }, [s, hydrated]);
       const reset = async () => { setS(DEFAULTS); try { await window.storage.delete(STORE_KEY); } catch (e) {} };
 
+      // per-year override handlers
+      const ovs = s.overrides || [];
+      const addOverride = () => setS((o) => ({ ...o, overrides: [...(o.overrides || []),
+        { id: Date.now() + Math.random(), year: Math.min(o.years, 3), field: "base", value: o.base }] }));
+      const updOverride = (id, k, v) => setS((o) => ({ ...o, overrides: (o.overrides || []).map((x) => x.id === id ? { ...x, [k]: v } : x) }));
+      const delOverride = (id) => setS((o) => ({ ...o, overrides: (o.overrides || []).filter((x) => x.id !== id) }));
+
       const p = { ...s, fixed: 60000 };
       const y1 = computeYear(p, 1);
       const negative = y1.liquid < 0;
@@ -226,7 +266,7 @@
         retBal = retBal * (1 + s.invReturn / 100) + cy.retirement;
         liqBal = liqBal * (1 + s.invReturn / 100) + cy.liquid;
         contrib += cy.totalSaved;
-        const qualInc = cy.base + cy.herSal + (s.inclBonus ? cy.bonus : 0);
+        const qualInc = cy.base + cy.herSal + (s.inclBonus ? cy.bonus + cy.herBonus : 0);
         const maxPITI = (s.feRatio / 100) * qualInc / 12;
         const down = Math.max(0, liqBal - s.emFund);     // put down everything above the e-fund
         const pmiMoRate = s.pmiRate / 100 / 12;           // monthly PMI per $1 of loan
@@ -244,10 +284,13 @@
         const pi = pmtFactor * loan, ti = tiRate * affordHome;
         const downPct = affordHome > 0 ? down / affordHome : 0;
         const pmiZone = pmiMo > 0;
+        const yrPins = ovs.filter((o) => Number(o.year) === yr);
+        const pinNote = yrPins.map((o) => `${OV_FIELDS[o.field] ? OV_FIELDS[o.field].label : o.field} → ${OV_FIELDS[o.field] && OV_FIELDS[o.field].pct ? o.value + "%" : fmtC(o.value)}`).join(" · ");
         proj.push({ yr, yourInc: cy.yourInc, herInc: cy.herInc, gross: cy.gross,
           yourTax: cy.yourTax, herTax: cy.herTax, tax: cy.tax, spending: cy.spending,
           liqSaved: cy.liquid, retSaved: cy.retirement, savedTot: cy.totalSaved,
-          bal: retBal + liqBal, retBalY: retBal, liqBalY: liqBal, contrib,
+          bal: retBal + liqBal, retBalY: retBal, liqBalY: liqBal, contrib, capHit: cy.capHit,
+          pinned: yrPins.length > 0, pinNote,
           qualInc, maxPITI, down, loan, affordHome, pi, ti, pmiMo, downPct, pmiZone });
       }
       const endBal = proj[proj.length - 1].bal, endRet = retBal, endLiq = liqBal;
@@ -385,11 +428,50 @@
             <Slider label="Your bonus %" value={s.bonusPct} setValue={set("bonusPct")} min={0} max={60} step={1} suffix="%" hint={"= " + fmt(s.base * s.bonusPct / 100) + " bonus"} />
             <Slider label="Your ESOP" value={s.esop} setValue={set("esop")} min={0} max={80000} step={1000} prefix="$" tint={C.sage} />
             <Slider label="Her salary" value={s.herSal} setValue={set("herSal")} min={0} max={250000} step={5000} prefix="$" />
+            <Slider label="Her bonus %" value={s.herBonusPct} setValue={set("herBonusPct")} min={0} max={60} step={1} suffix="%" hint={"= " + fmt(s.herSal * s.herBonusPct / 100) + " bonus"} />
           </Section>
 
           <Section title="Growth · per person" delay=".14s">
             <Slider label="Your income growth / yr" value={s.yourGrow} setValue={set("yourGrow")} min={0} max={12} step={0.5} suffix="%" tint={C.brass} />
             <Slider label="Her income growth / yr" value={s.herGrow} setValue={set("herGrow")} min={0} max={12} step={0.5} suffix="%" tint={C.brass} />
+            <div style={{ fontSize: 11.5, color: C.soft, margin: "-2px 0 6px" }}>Growth compounds yearly off the prior value — unless a raise below pins an exact number.</div>
+          </Section>
+
+          <Section title="Raises &amp; overrides" delay=".15s"
+            right={<button onClick={addOverride} style={{ fontSize: 11, color: C.terra, background: "none", border: `1px solid #e3c6b4`, borderRadius: 20, padding: "4px 13px", cursor: "pointer", fontWeight: 600, letterSpacing: ".03em" }}>+ Add raise</button>}>
+            {ovs.length === 0 && (
+              <div style={{ fontSize: 12.5, color: C.soft, lineHeight: 1.5, marginBottom: 4 }}>
+                No raises pinned. Add one to set an exact income in a given year (e.g. a promotion) — growth re-bases off that number for every later year, until the next raise.
+              </div>
+            )}
+            {ovs.map((o) => {
+              const meta = OV_FIELDS[o.field] || OV_FIELDS.base;
+              return (
+                <div key={o.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "8px 0", borderBottom: "1px solid #efe7d7" }}>
+                  <span style={{ fontSize: 11, color: C.mute, fontWeight: 600 }}>Yr</span>
+                  <input type="number" inputMode="numeric" min={1} max={s.years} value={o.year}
+                    onChange={(e) => updOverride(o.id, "year", e.target.value === "" ? 1 : Math.max(1, Math.min(s.years, Number(e.target.value))))}
+                    style={{ width: "3.2ch", fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 15, color: C.ink, border: "none", borderBottom: "1px dashed #d8ccb6", background: "transparent", textAlign: "center", outline: "none" }} />
+                  <select value={o.field} onChange={(e) => updOverride(o.id, "field", e.target.value)}
+                    style={{ fontFamily: "inherit", fontSize: 12.5, fontWeight: 600, color: C.ink, background: "#f6efe2", border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 8px", cursor: "pointer", outline: "none" }}>
+                    {Object.keys(OV_FIELDS).map((k) => <option key={k} value={k}>{OV_FIELDS[k].label}</option>)}
+                  </select>
+                  <span style={{ display: "inline-flex", alignItems: "baseline", marginLeft: "auto", fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 16, color: C.ink, whiteSpace: "nowrap" }}>
+                    {!meta.pct && <span>$</span>}
+                    <input type="number" inputMode="decimal" min={0} value={o.value} step={meta.pct ? 1 : 1000}
+                      onChange={(e) => updOverride(o.id, "value", e.target.value === "" ? 0 : Number(e.target.value))}
+                      style={{ width: `${Math.max(4, String(o.value).length + 1)}ch`, fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 16, color: C.ink, border: "none", borderBottom: "1px dashed #d8ccb6", background: "transparent", textAlign: "right", outline: "none" }} />
+                    {meta.pct && <span style={{ color: C.mute, fontSize: 13, marginLeft: 1 }}>%</span>}
+                  </span>
+                  <button onClick={() => delOverride(o.id)} aria-label="remove" style={{ border: "none", background: "none", color: C.soft, cursor: "pointer", fontSize: 18, lineHeight: 1, padding: "0 2px" }}>×</button>
+                </div>
+              );
+            })}
+            {ovs.length > 0 && (
+              <div style={{ fontSize: 11, color: C.soft, lineHeight: 1.5, marginTop: 8 }}>
+                A $ raise re-bases growth from that year; a % (bonus) holds until the next pin. Pinned years are marked <span style={{ color: C.terra, fontWeight: 700 }}>•</span> in the table below.
+              </div>
+            )}
           </Section>
 
           <Section title="Spending" delay=".16s">
@@ -463,7 +545,7 @@
                 <tbody>
                   {proj.map((d, i) => (
                     <tr key={d.yr} style={{ background: i % 2 ? "#faf5ea" : "#fffdf8" }}>
-                      <td style={{ padding: "7px 9px", fontWeight: 700, color: C.brass }}>{d.yr}</td>
+                      <td style={{ padding: "7px 9px", fontWeight: 700, color: C.brass, whiteSpace: "nowrap" }} title={d.pinNote || undefined}>{d.yr}{d.pinned && <span style={{ color: C.terra }}> •</span>}</td>
                       <td style={bc()}>{fmtC(d.yourInc)}</td>
                       <td style={bc()}>{fmtC(d.herInc)}</td>
                       <td style={bc({ fontWeight: 700, color: C.ink })}>{fmtC(d.gross)}</td>
@@ -488,7 +570,7 @@
           </Section>
 
           <div style={{ fontSize: 11, color: C.soft, lineHeight: 1.55, padding: "4px 4px 0" }}>
-            Tax engine uses verified 2026 figures: IRS Rev. Proc. 2025-32 federal brackets, $16,100 standard deduction, $184,500 Social Security wage base, 1.45% + 0.9% Medicare, and $24,500 401(k) / $7,500 IRA limits — plus California's latest FTB single brackets, $5,706 standard deduction, and 1.3% SDI (no cap). Each spouse files single. Brackets and limits index by your inflation rate across the projection, so there's no artificial bracket creep. Not modeled: itemized deductions (e.g. mortgage interest & property tax once you own), pre-tax benefits like health premiums or HSA, and exact 2026 CA brackets (FTB finalizes those later). Inputs auto-save here but don't carry into a separate chat. Planning math — your actual tax return and a lender pre-approval are the real tests.
+            Tax engine uses verified 2026 figures: IRS Rev. Proc. 2025-32 federal brackets, $16,100 standard deduction, $184,500 Social Security wage base, 1.45% + 0.9% Medicare, and $24,500 401(k) / $7,500 IRA / $72,000 §415(c) annual-additions limits — plus California's latest FTB single brackets, $5,706 standard deduction, and 1.3% SDI (no cap). Each spouse files single. Brackets and limits index by your inflation rate across the projection, so there's no artificial bracket creep. Each person's combined 401(k) deferral + employer match + ESOP is capped at the §415(c) limit; ESOP above it isn't contributed (not modeled as cash). Raises pinned in a given year override the smooth growth curve — a $ pin re-bases compounding from that year, a % (bonus) pin holds until the next pin. Not modeled: itemized deductions (e.g. mortgage interest & property tax once you own), pre-tax benefits like health premiums or HSA, catch-up contributions, and exact 2026 CA brackets (FTB finalizes those later). Inputs auto-save here but don't carry into a separate chat. Planning math — your actual tax return and a lender pre-approval are the real tests.
           </div>
         </div>
       );
