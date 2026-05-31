@@ -240,7 +240,7 @@
 
     const DEFAULTS = { base: 160000, bonusPct: 30, esop: 30000, herSal: 80000, herBonusPct: 0, varMo: 3500, big: 0,
       yourGrow: 4, herGrow: 3, expGrow: 3, invReturn: 6, years: 15, startRet: 0, startLiq: 0,
-      feRatio: 28, mortRate: 6.5, inclBonus: true, propTax: 1.25, insRate: 0.4, emFund: 50000, pmiRate: 0.6, closeCost: 3, infl: 2.7,
+      feRatio: 28, mortRate: 6.5, inclBonus: true, propTax: 1.25, insRate: 0.4, emFund: 50000, pmiRate: 0.6, closeCost: 3, pitiCap: 0, infl: 2.7,
       overrides: [] };
 
     // override field catalog — label, whether it's a % rate, and a value formatter
@@ -295,7 +295,9 @@
         liqBal = liqBal * (1 + s.invReturn / 100) + cy.liquid;
         contrib += cy.totalSaved;
         const qualInc = cy.base + cy.herSal + (s.inclBonus ? cy.bonus + cy.herBonus : 0);
-        const maxPITI = (s.feRatio / 100) * qualInc / 12;
+        const ratioPITI = (s.feRatio / 100) * qualInc / 12;
+        const maxPITI = s.pitiCap > 0 ? Math.min(ratioPITI, s.pitiCap) : ratioPITI; // personal ceiling caps the lender ratio
+        const pitiCapped = s.pitiCap > 0 && s.pitiCap < ratioPITI;
         const cash = Math.max(0, liqBal - s.emFund);      // cash above the e-fund — splits between down payment + closing costs
         const cc = (s.closeCost || 0) / 100;              // closing costs as % of purchase price
         const pmiMoRate = s.pmiRate / 100 / 12;           // monthly PMI per $1 of loan
@@ -327,7 +329,7 @@
           liqSaved: cy.liquid, retSaved: cy.retirement, savedTot: cy.totalSaved,
           bal: retBal + liqBal, retBalY: retBal, liqBalY: liqBal, contrib, capHit: cy.capHit,
           pinned: yrPins.length > 0, pinNote,
-          qualInc, maxPITI, down, loan, affordHome, closing, pi, ti, pmiMo, downPct, pmiZone });
+          qualInc, maxPITI, pitiCapped, down, loan, affordHome, closing, pi, ti, pmiMo, downPct, pmiZone });
       }
       const endBal = proj[proj.length - 1].bal, endRet = retBal, endLiq = liqBal;
       const totalContrib = contrib, growth = endBal - totalContrib;
@@ -531,13 +533,15 @@
                 <div style={{ fontSize: 10.5, color: C.soft }}>{s.inclBonus ? "base + bonus" : "base only"}</div>
               </div>
               <div style={{ flex: 1, background: "#f6efe2", borderRadius: 12, padding: "9px 13px", borderLeft: `3px solid ${C.terra}` }}>
-                <div style={{ fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>Max PITI / mo</div>
+                <div style={{ fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>Max PITI / mo{m1.pitiCapped ? " · capped" : ""}</div>
                 <div style={{ fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 20, color: C.terra }}>{fmt(m1.maxPITI)}</div>
                 <div style={{ fontSize: 10.5, color: C.soft }}>{fmtC(m1.pi)} P&amp;I + {fmtC(m1.ti)} tax/ins{m1.pmiMo > 0 ? ` + ${fmtC(m1.pmiMo)} PMI` : ""}</div>
               </div>
             </div>
             <Toggle label="Count bonus as income" value={s.inclBonus} setValue={set("inclBonus")} on="With bonus" off="Base only" />
             <Slider label="Lender front-end ratio" value={s.feRatio} setValue={set("feRatio")} min={20} max={40} step={1} suffix="% of gross" tint={C.brass} />
+            <Slider label="Cap PITI at" value={s.pitiCap} setValue={set("pitiCap")} min={0} max={15000} step={100} prefix="$" suffix="/mo" tint={C.sage}
+              hint={s.pitiCap > 0 ? "Your ceiling — used whenever it's below the lender ratio." : "Off — lender ratio governs. Set a $/mo cap to limit your own payment."} />
             <Slider label="Mortgage rate (30-yr)" value={s.mortRate} setValue={set("mortRate")} min={2.5} max={9.5} step={0.125} suffix="%" tint={C.brass} />
             <Slider label="Property tax / yr" value={s.propTax} setValue={set("propTax")} min={0.5} max={2.5} step={0.05} suffix="% of value" tint={C.brass} />
             <Slider label="Insurance / yr" value={s.insRate} setValue={set("insRate")} min={0.1} max={1.5} step={0.05} suffix="% of value" tint={C.brass} />
@@ -553,7 +557,7 @@
                 {eY.pmiZone && <span style={{ color: "#f0b89e" }}> · {fmtC(eY.pmiMo)}/mo PMI</span>}
               </div>
             </div>
-            <div style={{ fontSize: 11, color: C.soft, lineHeight: 1.5 }}>Assumes all liquid above your {fmtC(s.emFund)} emergency fund goes toward the purchase — closing costs ({s.closeCost}% of price) come out first, the rest is your down payment — then you borrow the most income supports (full PITI within {s.feRatio}%, with PMI added when down is under 20%). Retirement/ESOP aren't counted toward the down payment; HOA isn't included. A lender pre-approval is the real test.</div>
+            <div style={{ fontSize: 11, color: C.soft, lineHeight: 1.5 }}>Assumes all liquid above your {fmtC(s.emFund)} emergency fund goes toward the purchase — closing costs ({s.closeCost}% of price) come out first, the rest is your down payment — then you borrow the most income supports (full PITI within {s.feRatio}%{s.pitiCap > 0 ? `, but never above your ${fmtC(s.pitiCap)}/mo cap` : ""}, with PMI added when down is under 20%). Retirement/ESOP aren't counted toward the down payment; HOA isn't included. A lender pre-approval is the real test.</div>
           </Section>
 
           <Section title="Year by year" delay=".2s"
