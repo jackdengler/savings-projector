@@ -212,7 +212,7 @@
 
     const DEFAULTS = { base: 160000, bonusPct: 30, esop: 30000, herSal: 80000, herBonusPct: 0, varMo: 3500, big: 0,
       yourGrow: 4, herGrow: 3, expGrow: 3, invReturn: 6, years: 15, startRet: 0, startLiq: 0,
-      feRatio: 28, mortRate: 6.5, inclBonus: true, propTax: 1.25, insRate: 0.4, emFund: 50000, pmiRate: 0.6, infl: 2.7,
+      feRatio: 28, mortRate: 6.5, inclBonus: true, propTax: 1.25, insRate: 0.4, emFund: 50000, pmiRate: 0.6, closeCost: 3, infl: 2.7,
       overrides: [] };
 
     // override field catalog — label, whether it's a % rate, and a value formatter
@@ -268,19 +268,27 @@
         contrib += cy.totalSaved;
         const qualInc = cy.base + cy.herSal + (s.inclBonus ? cy.bonus + cy.herBonus : 0);
         const maxPITI = (s.feRatio / 100) * qualInc / 12;
-        const down = Math.max(0, liqBal - s.emFund);     // put down everything above the e-fund
+        const cash = Math.max(0, liqBal - s.emFund);      // cash above the e-fund — splits between down payment + closing costs
+        const cc = (s.closeCost || 0) / 100;              // closing costs as % of purchase price
         const pmiMoRate = s.pmiRate / 100 / 12;           // monthly PMI per $1 of loan
-        // first solve assuming no PMI
-        let loan = (maxPITI - tiRate * down) / (pmtFactor + tiRate);
-        let affordHome = loan >= 0 ? down + loan : maxPITI / tiRate;
-        let pmiMo = 0;
-        // if that puts you under 20% down, PMI applies — re-solve with PMI eating the budget
-        if (loan > 0 && down / affordHome < DOWN && pmiMoRate > 0) {
-          loan = (maxPITI - tiRate * down) / (pmtFactor + tiRate + pmiMoRate);
-          affordHome = down + loan;
-          pmiMo = pmiMoRate * loan;
+        // price = (cash + loan) / (1 + cc) since closing eats cc·price of the cash; tiAdj is TI per $1 of (cash + loan)
+        const tiAdj = tiRate / (1 + cc);
+        const solveLoan = (extra) => (maxPITI - tiAdj * cash) / (pmtFactor + extra + tiAdj);
+        let loan = solveLoan(0), pmiMo = 0, affordHome;
+        if (loan <= 0) {                                  // cash-rich / payment-constrained: no loan needed
+          loan = 0;
+          affordHome = Math.min(maxPITI / tiRate, cash / (1 + cc));
+        } else {
+          affordHome = (cash + loan) / (1 + cc);
+          // under 20% down -> PMI applies, re-solve with it eating the budget
+          if (affordHome > 0 && (affordHome - loan) / affordHome < DOWN && pmiMoRate > 0) {
+            loan = solveLoan(pmiMoRate);
+            affordHome = (cash + loan) / (1 + cc);
+            pmiMo = pmiMoRate * loan;
+          }
         }
-        if (loan < 0) loan = 0;
+        const closing = cc * affordHome;
+        const down = Math.max(0, affordHome - loan);      // = cash - closing
         const pi = pmtFactor * loan, ti = tiRate * affordHome;
         const downPct = affordHome > 0 ? down / affordHome : 0;
         const pmiZone = pmiMo > 0;
@@ -291,7 +299,7 @@
           liqSaved: cy.liquid, retSaved: cy.retirement, savedTot: cy.totalSaved,
           bal: retBal + liqBal, retBalY: retBal, liqBalY: liqBal, contrib, capHit: cy.capHit,
           pinned: yrPins.length > 0, pinNote,
-          qualInc, maxPITI, down, loan, affordHome, pi, ti, pmiMo, downPct, pmiZone });
+          qualInc, maxPITI, down, loan, affordHome, closing, pi, ti, pmiMo, downPct, pmiZone });
       }
       const endBal = proj[proj.length - 1].bal, endRet = retBal, endLiq = liqBal;
       const totalContrib = contrib, growth = endBal - totalContrib;
@@ -508,16 +516,18 @@
             <Slider label="Property tax / yr" value={s.propTax} setValue={set("propTax")} min={0.5} max={2.5} step={0.05} suffix="% of value" tint={C.brass} />
             <Slider label="Insurance / yr" value={s.insRate} setValue={set("insRate")} min={0.1} max={1.5} step={0.05} suffix="% of value" tint={C.brass} />
             <Slider label="PMI rate (if under 20%)" value={s.pmiRate} setValue={set("pmiRate")} min={0} max={1.5} step={0.05} suffix="% of loan / yr" tint={C.brass} />
+            <Slider label="Closing costs" value={s.closeCost} setValue={set("closeCost")} min={0} max={6} step={0.25} suffix="% of price" tint={C.brass} />
             <Slider label="Emergency fund to keep" value={s.emFund} setValue={set("emFund")} min={0} max={250000} step={5000} prefix="$" tint={C.sage} />
             <div style={{ background: C.ink, color: "#f6efe2", borderRadius: 14, padding: "13px 16px", margin: "4px 0 8px" }}>
               <div style={{ fontSize: 11, letterSpacing: ".1em", textTransform: "uppercase", opacity: .65, fontWeight: 600 }}>Affordable by year {s.years}</div>
               <div style={{ fontFamily: "Fraunces,serif", fontWeight: 700, fontSize: 30, lineHeight: 1.05, margin: "2px 0 4px" }}>{fmtC(eY.affordHome)}</div>
               <div style={{ fontSize: 12.5, opacity: .85 }}>
                 {fmtC(eY.down)} down ({(eY.downPct * 100).toFixed(0)}%) + {fmtC(eY.loan)} loan
+                {eY.closing > 0 && <span> · {fmtC(eY.closing)} closing</span>}
                 {eY.pmiZone && <span style={{ color: "#f0b89e" }}> · {fmtC(eY.pmiMo)}/mo PMI</span>}
               </div>
             </div>
-            <div style={{ fontSize: 11, color: C.soft, lineHeight: 1.5 }}>Assumes you put down all liquid above your {fmtC(s.emFund)} emergency fund, then borrow the most income supports (full PITI within {s.feRatio}%, with PMI added when down is under 20%). Retirement/ESOP aren't counted toward the down payment; HOA isn't included. A lender pre-approval is the real test.</div>
+            <div style={{ fontSize: 11, color: C.soft, lineHeight: 1.5 }}>Assumes all liquid above your {fmtC(s.emFund)} emergency fund goes toward the purchase — closing costs ({s.closeCost}% of price) come out first, the rest is your down payment — then you borrow the most income supports (full PITI within {s.feRatio}%, with PMI added when down is under 20%). Retirement/ESOP aren't counted toward the down payment; HOA isn't included. A lender pre-approval is the real test.</div>
           </Section>
 
           <Section title="Year by year" delay=".2s"
