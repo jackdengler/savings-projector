@@ -177,7 +177,8 @@
           }}
           onBlur={commit}
           onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-          style={{ width: `${Math.max(2, display.length + 0.5)}ch`, fontFamily: "Fraunces,serif", fontWeight: 600,
+          style={{ width: `${Math.max(2.5, display.length + 1)}ch`, fontFamily: "Fraunces,serif", fontWeight: 600,
+            fontVariantNumeric: "tabular-nums lining-nums", fontFeatureSettings: '"tnum","lnum"', boxSizing: "content-box", padding: "1px 1px",
             color: C.ink, border: "none", borderBottom: "1px dashed #d8ccb6", background: "transparent",
             textAlign: align || "right", outline: "none", ...style }} />
       );
