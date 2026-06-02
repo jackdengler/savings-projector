@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#221f1a" />
   <meta name="description" content="Savings & growth projector — two-income LA household, verified 2026 tax engine, mortgage capacity." />
   <title>Savings &amp; Growth Projector</title>
@@ -12,9 +12,12 @@
     html, body { margin: 0; padding: 0; background: #f4eee2; }
     #root { min-height: 100vh; }
   </style>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Pinned versions (reproducible loads, long-lived CDN cache) and `defer` so the
+       scripts download without blocking parse and still execute in order before the
+       text/babel block is transformed. Kept on CDN to preserve the zero-build design. -->
+  <script defer crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script defer crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script defer src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
 </head>
 <body>
   <div id="root"></div>
@@ -100,12 +103,11 @@
       if (a >= 1e4) return s + "$" + Math.round(a / 1e3) + "k";
       return s + "$" + Math.round(a).toLocaleString("en-US");
     };
-    const fmtK = (n) => "$" + (Math.round(n / 100) / 10) + "k";
 
     function computeYear(p, yr) {
       const eg = Math.pow(1 + p.expGrow / 100, yr - 1);
       const f = Math.pow(1 + (p.infl || 0) / 100, yr - 1); // indexes brackets, deductions & contribution limits
-      const your401k = YOUR_401K * f, ira = IRA * f, cap415 = LIMIT_415C * f;
+      const your401k = Math.min(p.your401kAmt ?? YOUR_401K, YOUR_401K) * f, ira = IRA * f, cap415 = LIMIT_415C * f;
 
       // resolve each field through any per-year pins (overrides)
       const ov = p.overrides || [];
@@ -119,7 +121,7 @@
 
       const bonus = base * (bonusPct / 100), herBonus = herSal * (herBonusPct / 100);
       const yourWages = base + bonus, herWages = herSal + herBonus;
-      const her401k = herSal * 0.03, yourMatch = base * 0.04, herMatch = herSal * 0.03; // match on base salary
+      const her401k = herSal * ((p.her401kPct ?? 3) / 100), yourMatch = base * ((p.yourMatchPct ?? 4) / 100), herMatch = herSal * ((p.herMatchPct ?? 3) / 100); // contributions/match as % of salary
       const yourTax = personTax(yourWages, your401k, f), herTax = personTax(herWages, her401k, f);
       const takeHome = (yourWages - your401k - yourTax) + (herWages - her401k - herTax);
       const fixed = p.fixedMo * 12 * eg, variable = p.varMo * 12 * eg, big = p.big * eg;
@@ -242,6 +244,7 @@
     const DEFAULTS = { base: 160000, bonusPct: 30, esop: 30000, herSal: 80000, herBonusPct: 0, fixedMo: 5000, varMo: 3500, big: 0,
       yourGrow: 4, herGrow: 3, expGrow: 3, invReturn: 6, years: 15, startRet: 0, startLiq: 0,
       feRatio: 28, mortRate: 6.5, inclBonus: true, propTax: 1.25, insRate: 0.4, emFund: 50000, pmiRate: 0.6, closeCost: 3, pitiCap: 0, infl: 2.7,
+      your401kAmt: 24500, yourMatchPct: 4, her401kPct: 3, herMatchPct: 3, liqTaxDrag: 15, retBand: 2, realDollars: false,
       overrides: [] };
 
     // override field catalog — label, whether it's a % rate, and a value formatter
@@ -288,12 +291,16 @@
       const tiRate = (s.propTax + s.insRate) / 100 / 12; // monthly taxes+insurance per $1 of home value
       const DOWN = 0.20; // conventional threshold below which PMI usually applies
 
+      // Liquid sits in a taxable brokerage, so its yearly growth is taxed (dividends +
+      // realized gains); retirement compounds tax-deferred. `liqTaxDrag` is that haircut.
+      const liqReturn = (ret) => (ret / 100) * (1 - (s.liqTaxDrag || 0) / 100);
+
       const proj = [];
       let retBal = s.startRet, liqBal = s.startLiq, contrib = s.startRet + s.startLiq;
       for (let yr = 1; yr <= s.years; yr++) {
         const cy = computeYear(p, yr);
         retBal = retBal * (1 + s.invReturn / 100) + cy.retirement;
-        liqBal = liqBal * (1 + s.invReturn / 100) + cy.liquid;
+        liqBal = liqBal * (1 + liqReturn(s.invReturn)) + cy.liquid;
         contrib += cy.totalSaved;
         const qualInc = cy.base + cy.herSal + (s.inclBonus ? cy.bonus + cy.herBonus : 0);
         const ratioPITI = (s.feRatio / 100) * qualInc / 12;
@@ -332,15 +339,40 @@
           pinned: yrPins.length > 0, pinNote,
           qualInc, maxPITI, pitiCapped, down, loan, affordHome, closing, pi, ti, pmiMo, downPct, pmiZone });
       }
-      const endBal = proj[proj.length - 1].bal, endRet = retBal, endLiq = liqBal;
-      const totalContrib = contrib, growth = endBal - totalContrib;
+      // "Today's dollars": deflate every nominal figure by the inflation factor of its
+      // own year so a long-horizon balance is shown in current buying power. Display-only —
+      // the compounding above already happened in nominal terms, so this just rescales.
+      const defl = (yr) => s.realDollars ? Math.pow(1 + (s.infl || 0) / 100, -(yr - 1)) : 1;
+      const DOLLAR_KEYS = ["yourInc", "herInc", "gross", "yourTax", "herTax", "tax", "spending",
+        "liqSaved", "retSaved", "savedTot", "bal", "retBalY", "liqBalY", "contrib",
+        "qualInc", "maxPITI", "down", "loan", "affordHome", "closing", "pi", "ti", "pmiMo"];
+      if (s.realDollars) for (const d of proj) { const k = defl(d.yr); for (const key of DOLLAR_KEYS) d[key] *= k; }
 
-      const m1 = proj[0], eY = proj[proj.length - 1];
+      const lastRow = proj[proj.length - 1];
+      const endBal = lastRow.bal, endRet = lastRow.retBalY, endLiq = lastRow.liqBalY;
+      const totalContrib = lastRow.contrib, growth = endBal - totalContrib;
+
+      const m1 = proj[0], eY = lastRow;
+
+      // ±band scenario: re-run the balance path at invReturn ± retBand (same deflator),
+      // shading the gap so the single-point return reads as a range, not a promise.
+      const totalSeries = (ret) => {
+        let rb = s.startRet, lb = s.startLiq;
+        return proj.map((d) => {
+          const cy = computeYear(p, d.yr);
+          rb = rb * (1 + ret / 100) + cy.retirement;
+          lb = lb * (1 + liqReturn(ret)) + cy.liquid;
+          return (rb + lb) * defl(d.yr);
+        });
+      };
+      const band = s.retBand > 0
+        ? { lo: totalSeries(Math.max(0, s.invReturn - s.retBand)), hi: totalSeries(s.invReturn + s.retBand) }
+        : null;
 
       /* chart */
       const W = 480, H = 170, padX = 10, padY = 14;
-      const maxV = Math.max(...proj.map((d) => d.bal), 1);
-      const minV = Math.min(0, ...proj.map((d) => d.bal));
+      const maxV = Math.max(...proj.map((d) => d.bal), 1, ...(band ? band.hi : []));
+      const minV = Math.min(0, ...proj.map((d) => d.bal), ...(band ? band.lo : []));
       const sx = (i) => padX + (i / (proj.length - 1 || 1)) * (W - 2 * padX);
       const sy = (v) => H - padY - ((v - minV) / (maxV - minV || 1)) * (H - 2 * padY);
       const baseY = sy(minV);
@@ -350,6 +382,10 @@
       const retArea = retLine + ` L ${retPts[retPts.length - 1].x} ${baseY} L ${retPts[0].x} ${baseY} Z`;
       const retRev = [...retPts].reverse();
       const liqArea = totLine + ` L ${retRev[0].x} ${retRev[0].y}` + smooth(retRev).replace(`M ${retRev[0].x} ${retRev[0].y}`, "") + " Z";
+      const bandHiPts = band ? band.hi.map((v, i) => ({ x: sx(i), y: sy(v) })) : null;
+      const bandLoPts = band ? band.lo.map((v, i) => ({ x: sx(i), y: sy(v) })) : null;
+      const loRev = bandLoPts ? [...bandLoPts].reverse() : null;
+      const bandArea = band ? smooth(bandHiPts) + ` L ${loRev[0].x} ${loRev[0].y} ` + smooth(loRev).replace(`M ${loRev[0].x} ${loRev[0].y}`, "") + " Z" : "";
       const ticks = [0, 1, 2, 3].map((k) => minV + ((maxV - minV) * k) / 3);
       const last = totPts[totPts.length - 1];
 
@@ -362,6 +398,97 @@
         whiteSpace: "nowrap", borderLeft: div ? HDIV : "none" });
       const bc = (extra, div) => ({ padding: "7px 8px", textAlign: "right",
         borderLeft: div ? BDIV : "none", ...(extra || {}) });
+
+      /* Render the year-by-year table to a PNG straight from the projection data — no
+         html2canvas, no DOM scrape, so it stays a single dependency-free file. On iPhone
+         this routes through the native share sheet (Save Image / Messages); elsewhere it
+         downloads. The image reflects the current today's-$ / nominal state. */
+      const saveTableImage = () => {
+        const GCOL = { Income: C.brass, Taxes: C.terra, Savings: C.sage, Balance: C.terra, Housing: C.brass };
+        const cols = [
+          { k: "yr", label: "Yr", grp: "" },
+          { k: "yourInc", label: "You", grp: "Income" }, { k: "herInc", label: "Her", grp: "Income" }, { k: "gross", label: "Total", grp: "Income" },
+          { k: "yourTax", label: "You", grp: "Taxes" }, { k: "herTax", label: "Her", grp: "Taxes" }, { k: "tax", label: "Total", grp: "Taxes" },
+          { k: "spending", label: "Spend", grp: "" },
+          { k: "liqSaved", label: "Liquid", grp: "Savings" }, { k: "retSaved", label: "Retire", grp: "Savings" }, { k: "savedTot", label: "Total", grp: "Savings" },
+          { k: "liqBalY", label: "Liquid", grp: "Balance" }, { k: "retBalY", label: "Retire", grp: "Balance" }, { k: "bal", label: "Total", grp: "Balance" },
+          { k: "maxPITI", label: "PITI/mo", grp: "Housing" }, { k: "affordHome", label: "Afford", grp: "Housing" },
+        ];
+        const cellColor = (k, d) => {
+          if (k === "liqSaved") return d.liqSaved < 0 ? "#a23a1e" : "#3c352c";
+          if (k === "retSaved" || k === "retBalY") return C.sage;
+          if (k === "savedTot" || k === "gross" || k === "maxPITI") return C.ink;
+          if (k === "tax") return "#7a6f5e";
+          if (k === "yourTax" || k === "herTax" || k === "liqBalY") return C.mute;
+          if (k === "bal") return C.terra;
+          if (k === "affordHome") return d.pmiZone ? C.terra : C.sage;
+          return "#3c352c";
+        };
+        const bold = (k) => ["gross", "tax", "savedTot", "bal", "affordHome"].includes(k);
+        const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const yrW = 46, colW = 78, padL = 16, padT = 16;
+        let cx = padL;
+        const xs = cols.map((c, i) => { const w = i === 0 ? yrW : colW; const o = { ...c, x: cx, w }; cx += w; return o; });
+        const totalW = cx + padL;
+        const titleH = 56, gH = 24, sH = 22, rowH = 26;
+        const headTop = padT + titleH, bodyTop = headTop + gH + sH;
+        const totalH = bodyTop + proj.length * rowH + 16;
+        let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">`;
+        svg += `<rect width="${totalW}" height="${totalH}" fill="${C.paper}"/>`;
+        svg += `<text x="${padL}" y="${padT + 24}" font-size="20" font-weight="700" fill="${C.terra}">Savings &amp; Growth — year by year</text>`;
+        const cap = `${s.years}-yr projection · ${s.invReturn}% return${s.retBand > 0 ? ` ±${s.retBand}` : ""} · ${s.realDollars ? "today's dollars" : "nominal dollars"}`;
+        svg += `<text x="${padL}" y="${padT + 46}" font-size="12.5" fill="${C.mute}">${esc(cap)}</text>`;
+        svg += `<rect x="0" y="${headTop}" width="${totalW}" height="${gH}" fill="${C.ink}"/>`;
+        svg += `<rect x="0" y="${headTop + gH}" width="${totalW}" height="${sH}" fill="#2c2820"/>`;
+        // group bands
+        for (let i = 0; i < xs.length;) {
+          const g = xs[i].grp;
+          if (!g) {
+            svg += `<text x="${xs[i].x + xs[i].w / 2}" y="${headTop + (gH + sH) / 2 + 4}" font-size="11" font-weight="700" fill="#f6efe2" text-anchor="middle">${esc(xs[i].label)}</text>`;
+            i++; continue;
+          }
+          let j = i; while (j < xs.length && xs[j].grp === g) j++;
+          const x0 = xs[i].x, x1 = xs[j - 1].x + xs[j - 1].w;
+          svg += `<text x="${(x0 + x1) / 2}" y="${headTop + 16}" font-size="10.5" font-weight="700" fill="${GCOL[g] || "#cdbfa6"}" text-anchor="middle" letter-spacing="1">${esc(g.toUpperCase())}</text>`;
+          for (let q = i; q < j; q++) svg += `<text x="${xs[q].x + xs[q].w - 6}" y="${headTop + gH + 15}" font-size="11" font-weight="600" fill="#cdbfa6" text-anchor="end">${esc(xs[q].label)}</text>`;
+          i = j;
+        }
+        // rows
+        proj.forEach((d, r) => {
+          const ry = bodyTop + r * rowH;
+          svg += `<rect x="0" y="${ry}" width="${totalW}" height="${rowH}" fill="${r % 2 ? "#faf5ea" : "#fffdf8"}"/>`;
+          xs.forEach((c) => {
+            if (c.k === "yr") {
+              svg += `<text x="${c.x + 8}" y="${ry + 17}" font-size="11.5" font-weight="700" fill="${C.brass}">${d.yr}${d.pinned ? " •" : ""}</text>`;
+            } else {
+              svg += `<text x="${c.x + c.w - 6}" y="${ry + 17}" font-size="11.5" font-weight="${bold(c.k) ? 700 : 500}" fill="${cellColor(c.k, d)}" text-anchor="end">${esc(fmtC(d[c.k]))}</text>`;
+            }
+          });
+        });
+        svg += `</svg>`;
+        const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+        const img = new Image();
+        img.onload = () => {
+          const scale = 2, canvas = document.createElement("canvas");
+          canvas.width = totalW * scale; canvas.height = totalH * scale;
+          const ctx = canvas.getContext("2d");
+          ctx.scale(scale, scale); ctx.drawImage(img, 0, 0);
+          URL.revokeObjectURL(url);
+          canvas.toBlob(async (png) => {
+            if (!png) return;
+            const file = new File([png], "savings-projection.png", { type: "image/png" });
+            try {
+              if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: "Savings projection" }); return; }
+            } catch (e) { if (e && e.name === "AbortError") return; }
+            const href = URL.createObjectURL(png), a = document.createElement("a");
+            a.href = href; a.download = "savings-projection.png"; a.target = "_blank";
+            document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(href), 4000);
+          }, "image/png");
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); };
+        img.src = url;
+      };
 
       return (
         <div style={{ fontFamily: "'Libre Franklin',system-ui,sans-serif", color: C.ink, minHeight: "100vh",
@@ -415,7 +542,7 @@
           <div className="rise" style={{ animationDelay: ".1s", background: C.card, borderRadius: 22, padding: "18px 20px 16px",
             margin: "14px 0", border: `1px solid ${C.border}`, boxShadow: "0 4px 16px rgba(60,45,25,.06)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-              <div style={{ fontSize: 11.5, letterSpacing: ".1em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>Projected · year {s.years}</div>
+              <div style={{ fontSize: 11.5, letterSpacing: ".1em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>Projected · year {s.years}{s.realDollars ? " · today's $" : ""}</div>
               <div style={{ fontSize: 12, color: C.mute }}>{fmtC(totalContrib)} in · <span style={{ color: C.sage, fontWeight: 600 }}>{fmtC(growth)} growth</span></div>
             </div>
             <div style={{ fontFamily: "Fraunces,serif", fontWeight: 700, fontSize: 38, lineHeight: 1.02, margin: "3px 0 12px", color: C.terra, letterSpacing: "-.02em" }}>{fmtC(endBal)}</div>
@@ -446,6 +573,9 @@
                   <text x={padX} y={sy(v) - 4} fontSize="9.5" fill={C.soft} fontFamily="Libre Franklin">{fmtC(v)}</text>
                 </g>
               ))}
+              {band && <path d={bandArea} fill={C.terra} fillOpacity="0.08" />}
+              {band && <path d={smooth(bandHiPts)} fill="none" stroke={C.terra} strokeWidth="1" strokeDasharray="2 3" opacity="0.45" />}
+              {band && <path d={smooth(bandLoPts)} fill="none" stroke={C.terra} strokeWidth="1" strokeDasharray="2 3" opacity="0.45" />}
               <path d={liqArea} fill="url(#liq)" />
               <path d={retArea} fill="url(#ret)" />
               <path d={retLine} fill="none" stroke={C.sage} strokeWidth="2" strokeLinecap="round" />
@@ -458,7 +588,8 @@
             <div style={{ display: "flex", gap: 18, fontSize: 11.5, color: C.mute }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 12, height: 12, background: C.sage, borderRadius: 3, opacity: .85 }} /> retirement</span>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 12, height: 12, background: C.terra, borderRadius: 3, opacity: .85 }} /> liquid</span>
-              <span style={{ color: C.soft }}>· {s.invReturn}% return</span>
+              <span style={{ color: C.soft }}>· {s.invReturn}% return{band ? ` ±${s.retBand}` : ""}</span>
+              {s.realDollars && <span style={{ color: C.sage, fontWeight: 600 }}>· today's $</span>}
             </div>
           </div>
 
@@ -474,6 +605,15 @@
             <Slider label="Your income growth / yr" value={s.yourGrow} setValue={set("yourGrow")} min={0} max={12} step={0.5} suffix="%" tint={C.brass} />
             <Slider label="Her income growth / yr" value={s.herGrow} setValue={set("herGrow")} min={0} max={12} step={0.5} suffix="%" tint={C.brass} />
             <div style={{ fontSize: 11.5, color: C.soft, margin: "-2px 0 6px" }}>Growth compounds yearly off the prior value — unless a raise below pins an exact number.</div>
+          </Section>
+
+          <Section title="Retirement contributions" delay=".145s">
+            <Slider label="Your 401(k) deferral" value={s.your401kAmt} setValue={set("your401kAmt")} min={0} max={24500} step={500} prefix="$" tint={C.sage}
+              hint="Indexed to inflation across the projection; capped at the 2026 elective-deferral limit." />
+            <Slider label="Your employer match" value={s.yourMatchPct} setValue={set("yourMatchPct")} min={0} max={12} step={0.5} suffix="% of base" tint={C.sage} />
+            <Slider label="Her 401(k) deferral" value={s.her401kPct} setValue={set("her401kPct")} min={0} max={25} step={0.5} suffix="% of salary" tint={C.sage} />
+            <Slider label="Her employer match" value={s.herMatchPct} setValue={set("herMatchPct")} min={0} max={12} step={0.5} suffix="% of salary" tint={C.sage} />
+            <div style={{ fontSize: 11.5, color: C.soft, margin: "-2px 0 6px" }}>Deferral + match + ESOP per person is still capped at the §415(c) annual-additions limit.</div>
           </Section>
 
           <Section title="Raises &amp; overrides" delay=".15s"
@@ -522,8 +662,18 @@
             <Slider label="Starting retirement balance" value={s.startRet} setValue={set("startRet")} min={0} max={2000000} step={25000} prefix="$" tint={C.sage} />
             <Slider label="Starting liquid balance" value={s.startLiq} setValue={set("startLiq")} min={0} max={1000000} step={10000} prefix="$" />
             <Slider label="Investment return / yr" value={s.invReturn} setValue={set("invReturn")} min={0} max={12} step={0.5} suffix="%" tint={C.brass} />
+            <Slider label="Return scenario band ±" value={s.retBand} setValue={set("retBand")} min={0} max={4} step={0.5} suffix="%" tint={C.terra}
+              hint={s.retBand > 0 ? `Chart shades returns from ${Math.max(0, s.invReturn - s.retBand)}% to ${s.invReturn + s.retBand}%.` : "Off — single-line projection."} />
+            <Slider label="Tax drag on liquid" value={s.liqTaxDrag} setValue={set("liqTaxDrag")} min={0} max={40} step={1} suffix="% of gains" tint={C.brass}
+              hint="Taxable-brokerage haircut on the liquid bucket's yearly growth. Retirement compounds tax-deferred." />
             <Slider label="Inflation (indexes tax & limits)" value={s.infl} setValue={set("infl")} min={0} max={6} step={0.1} suffix="%" tint={C.brass} />
             <Slider label="Years to project" value={s.years} setValue={set("years")} min={1} max={30} step={1} suffix="yrs" />
+            <Toggle label="Show balances in" value={s.realDollars} setValue={set("realDollars")} on="Today's $" off="Nominal $" />
+            <div style={{ fontSize: 11.5, color: C.soft, margin: "-6px 0 6px" }}>
+              {s.realDollars
+                ? `Every figure is deflated to today's buying power at your ${s.infl}% inflation rate.`
+                : "Nominal — future dollars at face value. Switch to today's $ to see real buying power."}
+            </div>
           </Section>
 
           <Section title="Base income · mortgage capacity" delay=".19s">
@@ -562,7 +712,10 @@
           </Section>
 
           <Section title="Year by year" delay=".2s"
-            right={<button onClick={reset} style={{ fontSize: 11, color: C.terra, background: "none", border: `1px solid #e3c6b4`, borderRadius: 20, padding: "4px 13px", cursor: "pointer", fontWeight: 600, letterSpacing: ".03em" }}>Reset all</button>}>
+            right={<div style={{ display: "flex", gap: 7 }}>
+              <button onClick={saveTableImage} style={{ fontSize: 11, color: C.sage, background: "none", border: `1px solid #cfe0d4`, borderRadius: 20, padding: "4px 13px", cursor: "pointer", fontWeight: 600, letterSpacing: ".03em" }}>↓ Save image</button>
+              <button onClick={reset} style={{ fontSize: 11, color: C.terra, background: "none", border: `1px solid #e3c6b4`, borderRadius: 20, padding: "4px 13px", cursor: "pointer", fontWeight: 600, letterSpacing: ".03em" }}>Reset all</button>
+            </div>}>
             <div style={{ overflowX: "auto", borderRadius: 12, border: `1px solid ${C.border}`, margin: "0 0 8px" }}>
               <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 1100, fontSize: 11.5, fontVariantNumeric: "tabular-nums" }}>
                 <thead>
@@ -611,7 +764,7 @@
           </Section>
 
           <div style={{ fontSize: 11, color: C.soft, lineHeight: 1.55, padding: "4px 4px 0" }}>
-            Tax engine uses verified 2026 figures: IRS Rev. Proc. 2025-32 federal brackets, $16,100 standard deduction, $184,500 Social Security wage base, 1.45% + 0.9% Medicare, and $24,500 401(k) / $7,500 IRA / $72,000 §415(c) annual-additions limits — plus California's latest FTB single brackets, $5,706 standard deduction, and 1.3% SDI (no cap). Each spouse files single. Brackets and limits index by your inflation rate across the projection, so there's no artificial bracket creep. Each person's combined 401(k) deferral + employer match + ESOP is capped at the §415(c) limit; ESOP above it isn't contributed (not modeled as cash). Raises pinned in a given year override the smooth growth curve — a $ pin re-bases compounding from that year, a % (bonus) pin holds until the next pin. Not modeled: itemized deductions (e.g. mortgage interest & property tax once you own), pre-tax benefits like health premiums or HSA, catch-up contributions, and exact 2026 CA brackets (FTB finalizes those later). Inputs auto-save here but don't carry into a separate chat. Planning math — your actual tax return and a lender pre-approval are the real tests.
+            Tax engine uses verified 2026 figures: IRS Rev. Proc. 2025-32 federal brackets, $16,100 standard deduction, $184,500 Social Security wage base, 1.45% + 0.9% Medicare, and $24,500 401(k) / $7,500 IRA / $72,000 §415(c) annual-additions limits — plus California's latest FTB single brackets, $5,706 standard deduction, and 1.3% SDI (no cap). Each spouse files single. Brackets and limits index by your inflation rate across the projection, so there's no artificial bracket creep. Each person's combined 401(k) deferral + employer match + ESOP is capped at the §415(c) limit; ESOP above it isn't contributed (not modeled as cash). Raises pinned in a given year override the smooth growth curve — a $ pin re-bases compounding from that year, a % (bonus) pin holds until the next pin. The liquid bucket compounds at an after-tax return (your tax-drag haircut on dividends &amp; realized gains); retirement compounds tax-deferred. Switch the projection to <b>today's dollars</b> to deflate every figure to current buying power, and set a <b>return band</b> to shade a ± scenario range around your point estimate. Not modeled: itemized deductions (e.g. mortgage interest & property tax once you own), pre-tax benefits like health premiums or HSA, catch-up contributions, and exact 2026 CA brackets (FTB finalizes those later). Inputs auto-save here but don't carry into a separate chat. Planning math — your actual tax return and a lender pre-approval are the real tests.
           </div>
         </div>
       );
