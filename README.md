@@ -15,7 +15,15 @@ ReactDOM and Babel load from CDN, so there's no build step.
   standard deduction and 1.3% SDI. Brackets and limits index by inflation
   across the projection.
 - **Year-by-year projection** of retirement vs. liquid balances, savings rate,
-  and total growth.
+  and total growth. The liquid bucket compounds at an after-tax return (a
+  configurable tax-drag haircut on dividends & realized gains) while retirement
+  compounds tax-deferred. Toggle the whole projection into **today's dollars** to
+  deflate every figure to current buying power, and set a **return band** to
+  shade a ± scenario range around the point estimate. 401(k) deferral and
+  employer-match rates are adjustable per person.
+- **Save the year-by-year table as an image** — renders straight from the
+  projection data (no extra dependencies) and routes through the iOS share sheet,
+  or downloads elsewhere.
 - **Mortgage capacity** — how much home the household can afford each year
   given liquid savings (above an emergency fund) and a lender front-end ratio,
   with PMI applied automatically when the down payment is under 20%.
