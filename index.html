@@ -122,7 +122,7 @@
       const her401k = herSal * 0.03, yourMatch = base * 0.04, herMatch = herSal * 0.03; // match on base salary
       const yourTax = personTax(yourWages, your401k, f), herTax = personTax(herWages, her401k, f);
       const takeHome = (yourWages - your401k - yourTax) + (herWages - her401k - herTax);
-      const fixed = p.fixed * eg, variable = p.varMo * 12 * eg, big = p.big * eg;
+      const fixed = p.fixedMo * 12 * eg, variable = p.varMo * 12 * eg, big = p.big * eg;
       const spending = fixed + variable + big;
       // §415(c) annual-additions cap: employee deferral + employer match + ESOP can't exceed the limit
       const yourAddRaw = your401k + yourMatch + esop, herAddRaw = her401k + herMatch;
@@ -239,7 +239,7 @@
       );
     }
 
-    const DEFAULTS = { base: 160000, bonusPct: 30, esop: 30000, herSal: 80000, herBonusPct: 0, varMo: 3500, big: 0,
+    const DEFAULTS = { base: 160000, bonusPct: 30, esop: 30000, herSal: 80000, herBonusPct: 0, fixedMo: 5000, varMo: 3500, big: 0,
       yourGrow: 4, herGrow: 3, expGrow: 3, invReturn: 6, years: 15, startRet: 0, startLiq: 0,
       feRatio: 28, mortRate: 6.5, inclBonus: true, propTax: 1.25, insRate: 0.4, emFund: 50000, pmiRate: 0.6, closeCost: 3, pitiCap: 0, infl: 2.7,
       overrides: [] };
@@ -279,7 +279,7 @@
       const updOverride = (id, k, v) => setS((o) => ({ ...o, overrides: (o.overrides || []).map((x) => x.id === id ? { ...x, [k]: v } : x) }));
       const delOverride = (id) => setS((o) => ({ ...o, overrides: (o.overrides || []).filter((x) => x.id !== id) }));
 
-      const p = { ...s, fixed: 60000 };
+      const p = { ...s };
       const y1 = computeYear(p, 1);
       const negative = y1.liquid < 0;
 
@@ -512,10 +512,10 @@
           </Section>
 
           <Section title="Spending" delay=".16s">
+            <Slider label="Fixed / month" value={s.fixedMo} setValue={set("fixedMo")} min={0} max={15000} step={100} prefix="$" suffix="/mo" hint={"= " + fmt(s.fixedMo * 12) + "/yr — rent, utilities, insurance & other recurring costs"} />
             <Slider label="Variable / month" value={s.varMo} setValue={set("varMo")} min={0} max={12000} step={100} prefix="$" suffix="/mo" />
             <Slider label="Big purchases / year" value={s.big} setValue={set("big")} min={0} max={60000} step={500} prefix="$" />
             <Slider label="Expense growth / yr" value={s.expGrow} setValue={set("expGrow")} min={0} max={10} step={0.5} suffix="%" tint={C.brass} />
-            <div style={{ fontSize: 11.5, color: C.soft, margin: "-2px 0 6px" }}>Fixed costs held at $5,000/mo ($60k/yr).</div>
           </Section>
 
           <Section title="Starting balances · projection" delay=".18s">
