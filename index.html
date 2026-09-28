@@ -3,14 +3,596 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#221f1a" />
+  <meta name="theme-color" content="#0b0b0b" />
+  <script>
+    /* Light / dark theme shared with Central Optimus (same origin): one
+       localStorage key, co.theme = "dark" | "light" (default dark), applied
+       before first paint and kept in step via the storage event. Keep this
+       contract identical to central-optimus/launcher/theme.js. */
+    (function () {
+      var KEY = "co.theme";
+      var BAR = { dark: "#0b0b0b", light: "#f5f2ea" };
+      function read() {
+        try {
+          return localStorage.getItem(KEY) === "light" ? "light" : "dark";
+        } catch (_) {
+          return "dark";
+        }
+      }
+      function apply(theme) {
+        document.documentElement.dataset.theme = theme;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", BAR[theme]);
+        document.dispatchEvent(new CustomEvent("co:theme", { detail: theme }));
+      }
+      apply(read());
+      window.addEventListener("storage", function (e) {
+        if (e.key === KEY) apply(read());
+      });
+      window.coTheme = {
+        get: read,
+        set: function (theme) {
+          try {
+            localStorage.setItem(KEY, theme);
+          } catch (_) {}
+          apply(theme);
+        },
+        toggle: function () {
+          this.set(read() === "light" ? "dark" : "light");
+        },
+      };
+    })();
+  </script>
   <meta name="description" content="Savings & growth projector — two-income LA household, verified 2026 tax engine, mortgage capacity." />
   <title>Savings &amp; Growth Projector</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preload" href="./fonts/Anton-400.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="./fonts/DMMono-400.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="./fonts/DMMono-500.woff2" as="font" type="font/woff2" crossorigin />
   <style>
-    html, body { margin: 0; padding: 0; background: #f4eee2; }
+    /* Central Optimus palette + type ("Big Type" launcher). Dark by default;
+       :root[data-theme="light"] flips the page to paper. Every colour below is
+       a role, and the app (inline styles and the CSS further down) only ever
+       references these tokens. */
+    @font-face {
+      font-family: "Anton";
+      src: url("./fonts/Anton-400.woff2") format("woff2");
+      font-weight: 1 1000;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: "DM Mono";
+      src: url("./fonts/DMMono-400.woff2") format("woff2");
+      font-weight: 1 499;
+      font-display: swap;
+    }
+    /* The app's heavier weights (500–700) all land on DM Mono Medium. */
+    @font-face {
+      font-family: "DM Mono";
+      src: url("./fonts/DMMono-500.woff2") format("woff2");
+      font-weight: 500 1000;
+      font-display: swap;
+    }
+    :root {
+      color-scheme: dark;
+      accent-color: #ffe500;
+      --ground: #0b0b0b;
+      --surface: #151515;
+      --surface-2: #101010;
+      --line: #3a3a3a;
+      --line-soft: #262626;
+      --ink: #f5f2ea;
+      --ink-2: #cfcac0;
+      --muted: #a8a49b;
+      --faint: #7a766e;
+      --accent: #ffe500;       /* fills only: selected, primary */
+      --accent-ink: #ffe500;   /* accent as text / line */
+      --sel-bg: var(--accent);
+      --sel-ink: #0b0b0b;
+      --good: #5fd38a;
+      --warn: #ffb612;
+      --bad: #ff5a4f;
+      /* Print black on bands, and the bands themselves: fixed in both themes. */
+      --k: #0b0b0b;
+      --brand: #b7791f;        /* Savings (launcher band) — marks "this app" */
+      --brand-bad: #ff5a4f;    /* the hero band when year 1 overspends */
+      --brand-ink: #b7791f;    /* brand as a small marker on the page */
+      /* Chart + sliders */
+      --ch-grid: #262626;
+      --ch-band: rgba(255, 229, 0, 0.1);
+      --range-fill: var(--accent);
+      --range-track: var(--line);
+      --thumb: var(--ink);
+      --big-num: var(--accent-ink);
+      --display: "Anton", "Impact", "Haettenschweiler", sans-serif;
+      --mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      --slant: 18px;
+    }
+    /* Light mode: the page flips to paper; yellow stays for fills
+       (selected, primary) and a dark mustard carries accent text/lines. */
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --ground: #f5f2ea;
+      --surface: #fffdf8;
+      --surface-2: #efebe2;
+      --line: #cfc8ba;
+      --line-soft: #e2dccf;
+      --ink: #0b0b0b;
+      --ink-2: #3a3731;
+      --muted: #6b665d;
+      --faint: #8f897e;
+      --accent-ink: #7a6300;
+      --good: #1e7d32;
+      --warn: #8a5a00;
+      --bad: #b3261e;
+      --brand-ink: #744210;
+      --ch-grid: #e2dccf;
+      --ch-band: rgba(122, 99, 0, 0.1);
+      --range-fill: var(--accent-ink);
+      --big-num: var(--ink);
+    }
+    html, body { margin: 0; padding: 0; background: var(--ground); color: var(--ink); }
+    body {
+      font-family: var(--mono);
+      font-synthesis: none;
+      -webkit-font-smoothing: antialiased;
+      -webkit-text-size-adjust: 100%;
+    }
     #root { min-height: 100vh; }
+    *, *::before, *::after { box-sizing: border-box; }
+    ::selection { background: var(--accent); color: var(--k); }
+  </style>
+  <style>
+    /* --- Big Type skin: the Central Optimus launcher's language ---
+       Square edges, Anton titles over a heavy 3px ink rule, uppercase mono
+       micro-labels. Savings amber (--brand) marks "this app" (the hero band,
+       small ticks); yellow marks "selected / do this". Layout, flows and
+       numbers are unchanged; this only restyles what the React tree renders. */
+    .sp-app {
+      position: relative;
+      max-width: 540px;
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: max(18px, env(safe-area-inset-top)) 16px calc(44px + env(safe-area-inset-bottom));
+      font-family: var(--mono);
+      color: var(--ink);
+    }
+    .sp-app button { font-family: var(--mono); -webkit-tap-highlight-color: transparent; }
+    .sp-app button:focus-visible,
+    .sp-select:focus-visible {
+      outline: 2px solid var(--ink);
+      outline-offset: 2px;
+    }
+    @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+    .rise { animation: rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+    @media (prefers-reduced-motion: reduce) { .rise { animation: none; } }
+
+    /* Micro-labels */
+    .sp-label {
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .sp-hint,
+    .sp-note {
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--muted);
+    }
+    .sp-hint { margin-top: 7px; }
+    .sp-note b { font-weight: 500; color: var(--ink-2); }
+
+    /* ---------- Header: kicker, Anton title over a heavy rule ---------- */
+    .sp-head {
+      padding-bottom: 12px;
+      border-bottom: 3px solid var(--ink);
+    }
+    .sp-head-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .sp-kicker {
+      padding-left: 16px;
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: linear-gradient(var(--brand), var(--brand)) 0 50% / 8px 8px no-repeat;
+    }
+    .sp-head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+    .sp-saved {
+      min-width: 94px;
+      padding: 4px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.12em;
+      text-align: center;
+      text-transform: uppercase;
+      color: var(--muted);
+      transition: color 0.3s, border-color 0.3s;
+    }
+    .sp-saved.is-saved { color: var(--good); border-color: var(--good); }
+    .sp-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .sp-icon svg { width: 20px; height: 20px; }
+    .sp-icon .i-moon,
+    :root[data-theme="light"] .sp-icon .i-sun { display: none; }
+    :root[data-theme="light"] .sp-icon .i-moon { display: block; }
+    .sp-title {
+      margin: 12px 0 0;
+      font-family: var(--display);
+      font-weight: 400;
+      font-size: clamp(50px, 15vw, 66px);
+      line-height: 0.88;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+    .sp-amp { color: var(--brand-ink); }
+
+    /* ---------- Hero: the Savings band, launcher-style diagonal ---------- */
+    .sp-hero {
+      position: relative;
+      margin: 16px -16px 0;
+      padding: 16px 16px calc(var(--slant) + 18px);
+      background: var(--brand);
+      color: var(--k);
+      clip-path: polygon(0 0, 100% 0, 100% calc(100% - var(--slant)), 0 100%);
+    }
+    .sp-hero.is-neg { background: var(--brand-bad); }
+    .sp-hero-label {
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    .sp-hero-num {
+      margin: 8px 0 12px;
+      font-family: var(--display);
+      font-weight: 400;
+      font-size: clamp(66px, 21vw, 92px);
+      line-height: 0.86;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+    .sp-hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 14px;
+      font-size: 12.5px;
+      font-weight: 500;
+    }
+    .sp-hero-meta b { font-weight: 500; }
+    .sp-hero-warn {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 2px solid var(--k);
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    /* ---------- Projection readout + chart ---------- */
+    .sp-proj { margin-top: 10px; }
+    .sp-proj-head {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 4px 12px;
+    }
+    .sp-proj-sub { font-size: 12px; color: var(--muted); }
+    .sp-bignum {
+      margin: 8px 0 16px;
+      font-family: var(--display);
+      font-weight: 400;
+      font-size: clamp(62px, 19vw, 84px);
+      line-height: 0.86;
+      letter-spacing: 0;
+      color: var(--big-num);
+    }
+    .sp-tiles {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      margin-bottom: 16px;
+      border: 1px solid var(--line);
+    }
+    .sp-tile { min-width: 0; padding: 12px 14px 13px; }
+    .sp-tile + .sp-tile { border-left: 1px solid var(--line); }
+    .sp-tile-label {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .sp-tile-label::before {
+      content: "";
+      flex: none;
+      width: 8px;
+      height: 8px;
+      background: var(--mark, var(--muted));
+    }
+    .sp-tile-num {
+      margin-top: 8px;
+      font-family: var(--display);
+      font-weight: 400;
+      font-size: 34px;
+      line-height: 0.9;
+      letter-spacing: 0;
+    }
+    .sp-tile-sub { margin-top: 6px; font-size: 10.5px; line-height: 1.4; color: var(--muted); }
+    .sp-chart { display: block; width: 100%; height: auto; overflow: hidden; }
+    .sp-axis {
+      display: flex;
+      justify-content: space-between;
+      margin: 6px 0 12px;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .sp-legend {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 16px;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .sp-key { display: inline-flex; align-items: center; gap: 7px; }
+    .sp-key i { width: 12px; height: 12px; }
+
+    /* ---------- Sections: Anton title over a heavy rule ---------- */
+    .sp-section { margin-top: 40px; }
+    .sp-section-head {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 10px 12px;
+      margin-bottom: 18px;
+      padding-bottom: 9px;
+      border-bottom: 3px solid var(--ink);
+    }
+    .sp-section-title {
+      margin: 0;
+      font-family: var(--display);
+      font-weight: 400;
+      font-size: 30px;
+      line-height: 0.9;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+    .sp-actions { display: flex; gap: 6px; }
+    .sp-btn {
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      color: var(--ink);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .sp-btn--primary { background: var(--sel-bg); border-color: var(--sel-bg); color: var(--sel-ink); }
+    .sp-btn--bad { color: var(--bad); }
+    .sp-btn:active,
+    .sp-x:active,
+    .sp-icon:active {
+      background: var(--sel-bg);
+      border-color: var(--sel-bg);
+      color: var(--sel-ink);
+    }
+
+    /* Sliders: mono label, editable value, square yellow fill + ink block thumb */
+    .sp-slider { padding-bottom: 18px; }
+    .sp-slider-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .sp-val {
+      display: inline-flex;
+      align-items: baseline;
+      white-space: nowrap;
+      font-size: 17px;
+      font-weight: 500;
+      color: var(--ink);
+    }
+    .sp-unit { font-size: 14px; color: var(--muted); }
+    .sp-suffix { margin-left: 4px; font-size: 12px; }
+    .sp-num {
+      font-family: var(--mono);
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+      color: var(--ink);
+      border: 0;
+      border-bottom: 1px dashed var(--line);
+      border-radius: 0;
+      background: transparent;
+      outline: none;
+    }
+    .sp-num:focus {
+      border-bottom: 1px solid var(--accent-ink);
+      box-shadow: 0 1px 0 var(--accent-ink);
+      background: var(--surface);
+    }
+    .sp-range {
+      -webkit-appearance: none;
+      appearance: none;
+      display: block;
+      width: 100%;
+      height: 6px;
+      margin: 14px 0 0;
+      border-radius: 0;
+      outline: none;
+      cursor: pointer;
+    }
+    .sp-range::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 24px;
+      height: 24px;
+      border: 4px solid var(--ground);
+      border-radius: 0;
+      background: var(--thumb);
+      cursor: pointer;
+      transition: transform 0.12s;
+    }
+    .sp-range::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      border: 4px solid var(--ground);
+      border-radius: 0;
+      background: var(--thumb);
+      cursor: pointer;
+    }
+    .sp-range:active::-webkit-slider-thumb { transform: scale(1.18); }
+    .sp-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--accent-ink); }
+    .sp-range:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(--accent-ink); }
+
+    /* Two-way switch: square segments, yellow = selected */
+    .sp-toggle {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+    .sp-seg { display: flex; flex: none; border: 1px solid var(--line); }
+    .sp-seg button {
+      min-height: 36px;
+      padding: 0 11px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .sp-seg button + button { border-left: 1px solid var(--line); }
+    .sp-seg button.is-on { background: var(--sel-bg); color: var(--sel-ink); }
+
+    /* Raises & overrides rows */
+    .sp-ov {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .sp-section-head + .sp-ov { padding-top: 0; }
+    .sp-ov-yr {
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .sp-select {
+      min-height: 34px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 0;
+      background: var(--ground);
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      outline: none;
+    }
+    .sp-select:focus { border-color: var(--accent-ink); }
+    .sp-ov-val { margin-left: auto; font-size: 16px; }
+    .sp-x {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      color: var(--ink-2);
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .sp-pin { color: var(--accent-ink); font-weight: 500; }
+
+    /* Mortgage: affordable-home readout */
+    .sp-afford {
+      margin: 2px 0 12px;
+      padding: 12px 16px 15px;
+      background: var(--surface);
+      border-top: 3px solid var(--ink);
+    }
+    .sp-afford-num {
+      margin: 8px 0 8px;
+      font-family: var(--display);
+      font-weight: 400;
+      font-size: 52px;
+      line-height: 0.88;
+      letter-spacing: 0;
+    }
+    .sp-afford-sub { font-size: 12.5px; line-height: 1.45; color: var(--ink-2); }
+
+    /* Year-by-year table */
+    .sp-table-wrap {
+      overflow-x: auto;
+      margin: 0 0 10px;
+      border: 1px solid var(--line);
+      -webkit-overflow-scrolling: touch;
+    }
+    .sp-table {
+      width: 100%;
+      min-width: 1100px;
+      border-collapse: collapse;
+      font-size: 11.5px;
+      font-variant-numeric: tabular-nums;
+      color: var(--ink);
+    }
+    .sp-table thead tr { background: var(--surface); }
+    .sp-table thead tr:last-child th,
+    .sp-table thead th[rowspan] { border-bottom: 2px solid var(--ink); }
+    .sp-foot {
+      margin-top: 36px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      font-size: 11px;
+      line-height: 1.6;
+      color: var(--muted);
+    }
+    .sp-foot b { font-weight: 500; color: var(--ink-2); }
   </style>
   <!-- Pinned versions (reproducible loads, long-lived CDN cache) and `defer` so the
        scripts download without blocking parse and still execute in order before the
@@ -157,8 +739,14 @@
       return d;
     }
 
-    const C = { paper: "#f4eee2", ink: "#221f1a", card: "#fffdf8", border: "#e8ddc9",
-      terra: "#bf5a2a", terraDk: "#a4481f", sage: "#4f8268", brass: "#b8893f", mute: "#8a7e6d", soft: "#b3a795" };
+    /* Central Optimus roles (tokens live in :root in <head>, so light/dark swap in
+       one place). Old names kept: terra = accent (the main series / totals),
+       sage = retirement / good, brass = the app's amber marker. Text never uses
+       --faint (under 4.5:1), so "soft" and "mute" both land on --muted.
+       saveTableImage resolves these to hex, since an SVG image can't see page CSS. */
+    const C = { paper: "var(--ground)", ink: "var(--ink)", ink2: "var(--ink-2)", card: "var(--surface)", border: "var(--line)",
+      terra: "var(--accent-ink)", terraDk: "var(--accent-ink)", sage: "var(--good)", brass: "var(--brand-ink)",
+      mute: "var(--muted)", soft: "var(--muted)", warn: "var(--warn)", bad: "var(--bad)" };
 
     // Editable number field: shows thousands-commas at rest, lets you type freely
     // (empty/partial allowed, no snapping to 0), commits live while it parses,
@@ -186,42 +774,40 @@
           }}
           onBlur={commit}
           onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-          style={{ width: `${Math.max(2.5, display.length + 1)}ch`, fontFamily: "Fraunces,serif", fontWeight: 600,
-            fontVariantNumeric: "tabular-nums lining-nums", fontFeatureSettings: '"tnum","lnum"', boxSizing: "content-box", padding: "1px 1px",
-            color: C.ink, border: "none", borderBottom: "1px dashed #d8ccb6", background: "transparent",
-            textAlign: align || "right", outline: "none", ...style }} />
+          className="sp-num"
+          style={{ width: `${Math.max(2.5, display.length + 1)}ch`, boxSizing: "content-box", padding: "1px 1px",
+            textAlign: align || "right", ...style }} />
       );
     }
+    // `tint` is still accepted from call sites, but every slider now shares the
+    // Optimus fill (yellow in dark, mustard in light) so the page reads as one system.
     function Slider({ label, value, setValue, min, max, step, prefix, suffix, hint, tint }) {
       const pct = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
       return (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, gap: 8 }}>
-            <span style={{ fontSize: 11.5, letterSpacing: ".06em", textTransform: "uppercase", color: C.mute, fontWeight: 500 }}>{label}</span>
-            <span style={{ display: "inline-flex", alignItems: "baseline", fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 17, color: C.ink, whiteSpace: "nowrap" }}>
-              {prefix && <span>{prefix}</span>}
+        <div className="sp-slider">
+          <div className="sp-slider-row">
+            <span className="sp-label">{label}</span>
+            <span className="sp-val">
+              {prefix && <span className="sp-unit">{prefix}</span>}
               <NumInput value={value} onCommit={setValue} min={0} decimals={!Number.isInteger(step)}
                 style={{ fontSize: 17, minWidth: "2ch", padding: "0 1px 1px" }} />
-              {suffix && <span style={{ color: C.mute, fontSize: 13, marginLeft: 2 }}>{suffix}</span>}
+              {suffix && <span className="sp-unit sp-suffix">{suffix}</span>}
             </span>
           </div>
-          <input type="range" min={min} max={max} step={step} value={Math.min(Math.max(value, min), max)}
+          <input type="range" className="sp-range" min={min} max={max} step={step} value={Math.min(Math.max(value, min), max)}
             onChange={(e) => setValue(Number(e.target.value))}
-            style={{ width: "100%", height: 7, borderRadius: 8, appearance: "none", WebkitAppearance: "none", outline: "none",
-              background: `linear-gradient(90deg,${tint || C.terra} ${pct}%,#e6dccb ${pct}%)`, cursor: "pointer", boxShadow: "inset 0 1px 2px rgba(0,0,0,.06)" }} />
-          {hint && <div style={{ fontSize: 11, color: C.soft, marginTop: 4 }}>{hint}</div>}
+            style={{ background: `linear-gradient(90deg,var(--range-fill) ${pct}%,var(--range-track) ${pct}%)` }} />
+          {hint && <div className="sp-hint">{hint}</div>}
         </div>
       );
     }
     function Toggle({ label, value, setValue, on, off }) {
       return (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <span style={{ fontSize: 11.5, letterSpacing: ".06em", textTransform: "uppercase", color: C.mute, fontWeight: 500 }}>{label}</span>
-          <div style={{ display: "flex", background: "#efe7d7", borderRadius: 20, padding: 3 }}>
+        <div className="sp-toggle">
+          <span className="sp-label">{label}</span>
+          <div className="sp-seg">
             {[[true, on], [false, off]].map(([v, lab]) => (
-              <button key={lab} onClick={() => setValue(v)} style={{ border: "none", cursor: "pointer", borderRadius: 16,
-                padding: "5px 15px", fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", transition: "all .15s",
-                background: value === v ? C.terra : "transparent", color: value === v ? "#fffdf8" : C.mute }}>{lab}</button>
+              <button key={lab} onClick={() => setValue(v)} aria-pressed={value === v} className={value === v ? "is-on" : undefined}>{lab}</button>
             ))}
           </div>
         </div>
@@ -229,22 +815,45 @@
     }
     function Row({ label, value, bold, accent }) {
       return (
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #efe7d7",
-          fontWeight: bold ? 700 : 400, color: accent ? C.terra : "#3c352c", fontSize: bold ? 15 : 13.5 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid var(--line-soft)",
+          fontWeight: bold ? 700 : 400, color: accent ? C.terra : C.ink2, fontSize: bold ? 15 : 13.5 }}>
           <span>{label}</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{value}</span>
         </div>
       );
     }
     function Section({ title, right, children, delay }) {
       return (
-        <div className="rise" style={{ animationDelay: delay, background: C.card, border: `1px solid ${C.border}`,
-          borderRadius: 20, padding: "16px 18px 8px", margin: "14px 0", boxShadow: "0 2px 10px rgba(60,45,25,.05)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-            <span style={{ fontFamily: "Fraunces,serif", fontSize: 12.5, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", color: C.terra }}>{title}</span>
+        <section className="sp-section rise" style={{ animationDelay: delay }}>
+          <div className="sp-section-head">
+            <h2 className="sp-section-title">{title}</h2>
             {right}
           </div>
           {children}
-        </div>
+        </section>
+      );
+    }
+    // Light / dark switch for the shared co.theme key (the head script owns it);
+    // relabels itself whenever the theme changes, here or in another window.
+    function ThemeToggle() {
+      const read = () => (window.coTheme ? window.coTheme.get() : "dark");
+      const [theme, setTheme] = useState(read);
+      useEffect(() => {
+        const onTheme = (e) => setTheme((e && e.detail) || read());
+        document.addEventListener("co:theme", onTheme);
+        return () => document.removeEventListener("co:theme", onTheme);
+      }, []);
+      const light = theme === "light";
+      return (
+        <button id="toggle-theme" type="button" className="sp-icon" onClick={() => window.coTheme && window.coTheme.toggle()}
+          aria-label={light ? "Switch to dark mode" : "Switch to light mode"} aria-pressed={light}>
+          <svg className="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" aria-hidden="true">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8" />
+          </svg>
+          <svg className="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true">
+            <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />
+          </svg>
+        </button>
       );
     }
 
@@ -407,12 +1016,12 @@
       const last = totPts[totPts.length - 1];
 
       /* year-by-year table styling helpers (grouped header) */
-      const HDIV = "1px solid rgba(246,239,226,.16)", BDIV = "1px solid #ece1cd";
-      const grp = (color, div) => ({ padding: "7px 9px 5px", textAlign: "center", fontWeight: 700, color,
-        letterSpacing: ".1em", textTransform: "uppercase", fontSize: 10.5,
-        borderLeft: div ? HDIV : "none", borderBottom: "1px solid rgba(246,239,226,.12)" });
-      const sub = (div) => ({ padding: "5px 9px 7px", textAlign: "right", fontWeight: 600,
-        whiteSpace: "nowrap", borderLeft: div ? HDIV : "none" });
+      const HDIV = "1px solid var(--line)", BDIV = "1px solid var(--line-soft)";
+      const grp = (color, div) => ({ padding: "8px 9px 5px", textAlign: "center", fontWeight: 500, color,
+        letterSpacing: ".12em", textTransform: "uppercase", fontSize: 10.5,
+        borderLeft: div ? HDIV : "none", borderBottom: "1px solid var(--line-soft)" });
+      const sub = (div) => ({ padding: "5px 9px 7px", textAlign: "right", fontWeight: 500, fontSize: 10.5,
+        letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap", borderLeft: div ? HDIV : "none" });
       const bc = (extra, div) => ({ padding: "7px 8px", textAlign: "right",
         borderLeft: div ? BDIV : "none", ...(extra || {}) });
 
@@ -421,7 +1030,15 @@
          this routes through the native share sheet (Save Image / Messages); elsewhere it
          downloads. The image reflects the current today's-$ / nominal state. */
       const saveTableImage = () => {
-        const GCOL = { Income: C.brass, Taxes: C.terra, Savings: C.sage, Balance: C.terra, Housing: C.brass };
+        // The SVG is rasterized as an image, which can't see this page's CSS: resolve
+        // the Optimus tokens to hex for whichever theme is showing right now.
+        const cs = getComputedStyle(document.documentElement);
+        const tok = (name, fb) => cs.getPropertyValue(name).trim() || fb;
+        const X = { ground: tok("--ground", "#0b0b0b"), surface: tok("--surface", "#151515"), ink: tok("--ink", "#f5f2ea"),
+          ink2: tok("--ink-2", "#cfcac0"), muted: tok("--muted", "#a8a49b"), line: tok("--line", "#3a3a3a"),
+          accent: tok("--accent-ink", "#ffe500"), good: tok("--good", "#5fd38a"), warn: tok("--warn", "#ffb612"),
+          bad: tok("--bad", "#ff5a4f"), brand: tok("--brand", "#b7791f"), brandInk: tok("--brand-ink", "#b7791f") };
+        const GCOL = { Income: X.brandInk, Taxes: X.accent, Savings: X.good, Balance: X.accent, Housing: X.brandInk };
         const cols = [
           { k: "yr", label: "Yr", grp: "" },
           { k: "yourInc", label: "You", grp: "Income" }, { k: "herInc", label: "Her", grp: "Income" }, { k: "gross", label: "Total", grp: "Income" },
@@ -432,14 +1049,14 @@
           { k: "maxPITI", label: "PITI/mo", grp: "Housing" }, { k: "affordHome", label: "Afford", grp: "Housing" },
         ];
         const cellColor = (k, d) => {
-          if (k === "liqSaved") return d.liqSaved < 0 ? "#a23a1e" : "#3c352c";
-          if (k === "retSaved" || k === "retBalY") return C.sage;
-          if (k === "savedTot" || k === "gross" || k === "maxPITI") return C.ink;
-          if (k === "tax") return "#7a6f5e";
-          if (k === "yourTax" || k === "herTax" || k === "liqBalY") return C.mute;
-          if (k === "bal") return C.terra;
-          if (k === "affordHome") return d.pmiZone ? C.terra : C.sage;
-          return "#3c352c";
+          if (k === "liqSaved") return d.liqSaved < 0 ? X.bad : X.ink2;
+          if (k === "retSaved" || k === "retBalY") return X.good;
+          if (k === "savedTot" || k === "gross" || k === "maxPITI") return X.ink;
+          if (k === "tax") return X.ink2;
+          if (k === "yourTax" || k === "herTax" || k === "liqBalY") return X.muted;
+          if (k === "bal") return X.accent;
+          if (k === "affordHome") return d.pmiZone ? X.warn : X.good;
+          return X.ink2;
         };
         const bold = (k) => ["gross", "tax", "savedTot", "bal", "affordHome"].includes(k);
         const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -450,33 +1067,35 @@
         const titleH = 56, gH = 24, sH = 22, rowH = 26;
         const headTop = padT + titleH, bodyTop = headTop + gH + sH;
         const totalH = bodyTop + proj.length * rowH + 16;
-        let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">`;
-        svg += `<rect width="${totalW}" height="${totalH}" fill="${C.paper}"/>`;
-        svg += `<text x="${padL}" y="${padT + 24}" font-size="20" font-weight="700" fill="${C.terra}">Savings &amp; Growth — year by year</text>`;
+        let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}" font-family="'DM Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace">`;
+        svg += `<rect width="${totalW}" height="${totalH}" fill="${X.ground}"/>`;
+        svg += `<rect width="${totalW}" height="6" fill="${X.brand}"/>`;
+        svg += `<text x="${padL}" y="${padT + 24}" font-size="20" font-weight="700" fill="${X.ink}">Savings &amp; Growth — year by year</text>`;
         const cap = `${s.years}-yr projection · ${s.invReturn}% return${s.retBand > 0 ? ` ±${s.retBand}` : ""} · ${s.realDollars ? "today's dollars" : "nominal dollars"}`;
-        svg += `<text x="${padL}" y="${padT + 46}" font-size="12.5" fill="${C.mute}">${esc(cap)}</text>`;
-        svg += `<rect x="0" y="${headTop}" width="${totalW}" height="${gH}" fill="${C.ink}"/>`;
-        svg += `<rect x="0" y="${headTop + gH}" width="${totalW}" height="${sH}" fill="#2c2820"/>`;
+        svg += `<text x="${padL}" y="${padT + 46}" font-size="12.5" fill="${X.muted}">${esc(cap)}</text>`;
+        svg += `<rect x="0" y="${headTop}" width="${totalW}" height="${gH + sH}" fill="${X.surface}"/>`;
+        svg += `<rect x="0" y="${headTop + gH - 1}" width="${totalW}" height="1" fill="${X.line}"/>`;
+        svg += `<rect x="0" y="${bodyTop - 2}" width="${totalW}" height="2" fill="${X.ink}"/>`;
         // group bands
         for (let i = 0; i < xs.length;) {
           const g = xs[i].grp;
           if (!g) {
-            svg += `<text x="${xs[i].x + xs[i].w / 2}" y="${headTop + (gH + sH) / 2 + 4}" font-size="11" font-weight="700" fill="#f6efe2" text-anchor="middle">${esc(xs[i].label)}</text>`;
+            svg += `<text x="${xs[i].x + xs[i].w / 2}" y="${headTop + (gH + sH) / 2 + 4}" font-size="11" font-weight="700" fill="${X.ink}" text-anchor="middle">${esc(xs[i].label)}</text>`;
             i++; continue;
           }
           let j = i; while (j < xs.length && xs[j].grp === g) j++;
           const x0 = xs[i].x, x1 = xs[j - 1].x + xs[j - 1].w;
-          svg += `<text x="${(x0 + x1) / 2}" y="${headTop + 16}" font-size="10.5" font-weight="700" fill="${GCOL[g] || "#cdbfa6"}" text-anchor="middle" letter-spacing="1">${esc(g.toUpperCase())}</text>`;
-          for (let q = i; q < j; q++) svg += `<text x="${xs[q].x + xs[q].w - 6}" y="${headTop + gH + 15}" font-size="11" font-weight="600" fill="#cdbfa6" text-anchor="end">${esc(xs[q].label)}</text>`;
+          svg += `<text x="${(x0 + x1) / 2}" y="${headTop + 16}" font-size="10.5" font-weight="700" fill="${GCOL[g] || X.muted}" text-anchor="middle" letter-spacing="1">${esc(g.toUpperCase())}</text>`;
+          for (let q = i; q < j; q++) svg += `<text x="${xs[q].x + xs[q].w - 6}" y="${headTop + gH + 15}" font-size="11" font-weight="600" fill="${X.muted}" text-anchor="end">${esc(xs[q].label)}</text>`;
           i = j;
         }
         // rows
         proj.forEach((d, r) => {
           const ry = bodyTop + r * rowH;
-          svg += `<rect x="0" y="${ry}" width="${totalW}" height="${rowH}" fill="${r % 2 ? "#faf5ea" : "#fffdf8"}"/>`;
+          svg += `<rect x="0" y="${ry}" width="${totalW}" height="${rowH}" fill="${r % 2 ? X.surface : X.ground}"/>`;
           xs.forEach((c) => {
             if (c.k === "yr") {
-              svg += `<text x="${c.x + 8}" y="${ry + 17}" font-size="11.5" font-weight="700" fill="${C.brass}">${d.yr}${d.pinned ? " •" : ""}</text>`;
+              svg += `<text x="${c.x + 8}" y="${ry + 17}" font-size="11.5" font-weight="700" fill="${X.brandInk}">${d.yr}${d.pinned ? " •" : ""}</text>`;
             } else {
               svg += `<text x="${c.x + c.w - 6}" y="${ry + 17}" font-size="11.5" font-weight="${bold(c.k) ? 700 : 500}" fill="${cellColor(c.k, d)}" text-anchor="end">${esc(fmtC(d[c.k]))}</text>`;
             }
@@ -508,105 +1127,87 @@
       };
 
       return (
-        <div style={{ fontFamily: "'Libre Franklin',system-ui,sans-serif", color: C.ink, minHeight: "100vh",
-          position: "relative", padding: "24px 18px 44px", maxWidth: 540, margin: "0 auto",
-          background: `radial-gradient(120% 60% at 50% 0%, #faf6ec 0%, ${C.paper} 55%, #efe7d6 100%)` }}>
-          <style>{`@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Libre+Franklin:wght@400;500;600&display=swap');
-            *{box-sizing:border-box}
-            input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:24px;height:24px;border-radius:50%;background:#fffdf8;border:3px solid ${C.terra};box-shadow:0 2px 7px rgba(120,60,20,.3);cursor:pointer;transition:transform .12s}
-            input[type=range]::-webkit-slider-thumb:active{transform:scale(1.18)}
-            input[type=range]::-moz-range-thumb{width:24px;height:24px;border-radius:50%;background:#fffdf8;border:3px solid ${C.terra};cursor:pointer}
-            @keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
-            @keyframes glow{0%,100%{box-shadow:0 14px 36px rgba(34,31,26,.22)}50%{box-shadow:0 14px 44px rgba(191,90,42,.30)}}
-            .rise{animation:rise .6s cubic-bezier(.2,.7,.2,1) both}
-            .noise{position:fixed;inset:0;pointer-events:none;opacity:.04;mix-blend-mode:multiply;z-index:50;
-              background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}`}</style>
-          <div className="noise" />
+        <div className="sp-app">
 
           {/* Header */}
-          <div className="rise" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
-            <div>
-              <div style={{ fontSize: 11, letterSpacing: ".22em", textTransform: "uppercase", color: C.brass, fontWeight: 600 }}>Los Angeles · Two Incomes</div>
-              <h1 style={{ fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 31, margin: "3px 0 0", lineHeight: 1.05, letterSpacing: "-.01em" }}>Savings <span style={{ fontStyle: "italic", color: C.terra }}>&amp;</span> Growth</h1>
-            </div>
-            <span style={{ fontSize: 10.5, color: saved ? C.sage : C.soft, marginTop: 26, fontWeight: 600, letterSpacing: ".04em",
-              border: `1px solid ${saved ? "#cfe0d4" : "#e6dccb"}`, borderRadius: 20, padding: "3px 9px", transition: "all .3s" }}>
-              {saved ? "✓ saved" : "auto-saves"}
-            </span>
-          </div>
-
-          {/* Hero */}
-          <div className="rise" style={{ animationDelay: ".05s", borderRadius: 22, padding: "20px 22px 18px", margin: "16px 0 6px",
-            position: "relative", overflow: "hidden", color: negative ? "#7a2a16" : "#f6efe2",
-            background: negative ? "linear-gradient(160deg,#f7ddd2,#f1c9b8)" : "linear-gradient(160deg,#322c24,#221f1a 70%)",
-            boxShadow: negative ? "0 12px 30px rgba(160,60,30,.18)" : "0 14px 36px rgba(34,31,26,.22)",
-            borderTop: `2px solid ${negative ? "#d98c6f" : "rgba(184,137,63,.5)"}` }}>
-            <div style={{ position: "absolute", right: -40, top: -40, width: 160, height: 160, borderRadius: "50%",
-              background: negative ? "rgba(191,90,42,.12)" : "rgba(184,137,63,.12)", filter: "blur(8px)" }} />
-            <div style={{ position: "relative" }}>
-              <div style={{ fontSize: 11, letterSpacing: ".14em", textTransform: "uppercase", opacity: .68, fontWeight: 600 }}>Saved · Year 1</div>
-              <div style={{ fontFamily: "Fraunces,serif", fontWeight: 700, fontSize: 46, lineHeight: 1, margin: "5px 0 6px", letterSpacing: "-.02em" }}>{fmt(y1.totalSaved)}</div>
-              <div style={{ display: "flex", gap: 14, fontSize: 13, opacity: .9, flexWrap: "wrap" }}>
-                <span><b style={{ fontFamily: "Fraunces,serif" }}>{((y1.totalSaved / y1.gross) * 100).toFixed(0)}%</b> savings rate</span>
-                <span>{fmtC(y1.retirement)} retirement</span>
-                <span>{fmtC(Math.max(y1.liquid, 0))} liquid</span>
+          <header className="sp-head rise">
+            <div className="sp-head-top">
+              <div className="sp-kicker">Los Angeles · Two Incomes</div>
+              <div className="sp-head-actions">
+                <span className={"sp-saved" + (saved ? " is-saved" : "")}>
+                  {saved ? "✓ saved" : "auto-saves"}
+                </span>
+                <ThemeToggle />
               </div>
-              {negative && <div style={{ marginTop: 9, fontSize: 13, fontWeight: 700 }}>⚠ Overspending take-home by {fmt(-y1.liquid)}</div>}
             </div>
+            <h1 className="sp-title">Savings <span className="sp-amp">&amp;</span> Growth</h1>
+          </header>
+
+          {/* Hero: the Savings band (launcher colour), red when year 1 overspends */}
+          <div className={"sp-hero rise" + (negative ? " is-neg" : "")} style={{ animationDelay: ".05s" }}>
+            <div className="sp-hero-label">Saved · Year 1</div>
+            <div className="sp-hero-num">{fmt(y1.totalSaved)}</div>
+            <div className="sp-hero-meta">
+              <span><b>{((y1.totalSaved / y1.gross) * 100).toFixed(0)}%</b> savings rate</span>
+              <span>{fmtC(y1.retirement)} retirement</span>
+              <span>{fmtC(Math.max(y1.liquid, 0))} liquid</span>
+            </div>
+            {negative && <div className="sp-hero-warn">⚠ Overspending take-home by {fmt(-y1.liquid)}</div>}
           </div>
 
           {/* Projection */}
-          <div className="rise" style={{ animationDelay: ".1s", background: C.card, borderRadius: 22, padding: "18px 20px 16px",
-            margin: "14px 0", border: `1px solid ${C.border}`, boxShadow: "0 4px 16px rgba(60,45,25,.06)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-              <div style={{ fontSize: 11.5, letterSpacing: ".1em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>Projected · year {s.years}{s.realDollars ? " · today's $" : ""}</div>
-              <div style={{ fontSize: 12, color: C.mute }}>{fmtC(totalContrib)} in · <span style={{ color: C.sage, fontWeight: 600 }}>{fmtC(growth)} growth</span></div>
+          <div className="sp-proj rise" style={{ animationDelay: ".1s" }}>
+            <div className="sp-proj-head">
+              <div className="sp-label">Projected · year {s.years}{s.realDollars ? " · today's $" : ""}</div>
+              <div className="sp-proj-sub">{fmtC(totalContrib)} in · <span style={{ color: C.sage, fontWeight: 500 }}>{fmtC(growth)} growth</span></div>
             </div>
-            <div style={{ fontFamily: "Fraunces,serif", fontWeight: 700, fontSize: 38, lineHeight: 1.02, margin: "3px 0 12px", color: C.terra, letterSpacing: "-.02em" }}>{fmtC(endBal)}</div>
+            <div className="sp-bignum">{fmtC(endBal)}</div>
 
-            <div style={{ display: "flex", gap: 9, marginBottom: 14 }}>
+            <div className="sp-tiles">
               {[["Retirement", endRet, C.sage], ["Liquid", endLiq, C.terra]].map(([lab, val, col]) => (
-                <div key={lab} style={{ flex: 1, background: "#f6efe2", borderRadius: 12, padding: "9px 13px", borderLeft: `3px solid ${col}` }}>
-                  <div style={{ fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>{lab}</div>
-                  <div style={{ fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 20, color: col }}>{fmtC(val)}</div>
+                <div key={lab} className="sp-tile" style={{ "--mark": col }}>
+                  <div className="sp-tile-label">{lab}</div>
+                  <div className="sp-tile-num" style={{ color: col }}>{fmtC(val)}</div>
                 </div>
               ))}
             </div>
 
-            <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block", overflow: "visible" }}>
+            {/* Same geometry as before; only colours moved to tokens. Clipped to its
+                box so an out-of-range series can't paint over the page. */}
+            <svg viewBox={`0 0 ${W} ${H}`} className="sp-chart">
               <defs>
                 <linearGradient id="ret" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={C.sage} stopOpacity="0.42" />
-                  <stop offset="100%" stopColor={C.sage} stopOpacity="0.12" />
+                  <stop offset="0%" style={{ stopColor: C.sage, stopOpacity: 0.4 }} />
+                  <stop offset="100%" style={{ stopColor: C.sage, stopOpacity: 0.1 }} />
                 </linearGradient>
                 <linearGradient id="liq" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={C.terra} stopOpacity="0.40" />
-                  <stop offset="100%" stopColor={C.terra} stopOpacity="0.10" />
+                  <stop offset="0%" style={{ stopColor: C.terra, stopOpacity: 0.34 }} />
+                  <stop offset="100%" style={{ stopColor: C.terra, stopOpacity: 0.06 }} />
                 </linearGradient>
               </defs>
               {ticks.map((v, i) => (
                 <g key={i}>
-                  <line x1={padX} y1={sy(v)} x2={W - padX} y2={sy(v)} stroke="#e8ddc9" strokeWidth="1" />
-                  <text x={padX} y={sy(v) - 4} fontSize="9.5" fill={C.soft} fontFamily="Libre Franklin">{fmtC(v)}</text>
+                  <line x1={padX} y1={sy(v)} x2={W - padX} y2={sy(v)} style={{ stroke: "var(--ch-grid)" }} strokeWidth="1" />
+                  <text x={padX} y={sy(v) - 4} fontSize="11" style={{ fill: C.soft, fontFamily: "var(--mono)" }}>{fmtC(v)}</text>
                 </g>
               ))}
-              {band && <path d={bandArea} fill={C.terra} fillOpacity="0.08" />}
-              {band && <path d={smooth(bandHiPts)} fill="none" stroke={C.terra} strokeWidth="1" strokeDasharray="2 3" opacity="0.45" />}
-              {band && <path d={smooth(bandLoPts)} fill="none" stroke={C.terra} strokeWidth="1" strokeDasharray="2 3" opacity="0.45" />}
+              {band && <path d={bandArea} style={{ fill: "var(--ch-band)" }} />}
+              {band && <path d={smooth(bandHiPts)} fill="none" style={{ stroke: C.terra }} strokeWidth="1" strokeDasharray="2 3" opacity="0.6" />}
+              {band && <path d={smooth(bandLoPts)} fill="none" style={{ stroke: C.terra }} strokeWidth="1" strokeDasharray="2 3" opacity="0.6" />}
               <path d={liqArea} fill="url(#liq)" />
               <path d={retArea} fill="url(#ret)" />
-              <path d={retLine} fill="none" stroke={C.sage} strokeWidth="2" strokeLinecap="round" />
-              <path d={totLine} fill="none" stroke={C.terra} strokeWidth="2.6" strokeLinecap="round" />
-              <circle cx={last.x} cy={last.y} r="4.5" fill={C.terra} stroke="#fffdf8" strokeWidth="2" />
+              <path d={retLine} fill="none" style={{ stroke: C.sage }} strokeWidth="2" />
+              <path d={totLine} fill="none" style={{ stroke: C.terra }} strokeWidth="2.6" />
+              <circle cx={last.x} cy={last.y} r="4.5" style={{ fill: C.terra, stroke: C.paper }} strokeWidth="2" />
             </svg>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: C.soft, margin: "2px 2px 8px" }}>
+            <div className="sp-axis">
               <span>Yr 1</span><span>Yr {Math.ceil(s.years / 2)}</span><span>Yr {s.years}</span>
             </div>
-            <div style={{ display: "flex", gap: 18, fontSize: 11.5, color: C.mute }}>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 12, height: 12, background: C.sage, borderRadius: 3, opacity: .85 }} /> retirement</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 12, height: 12, background: C.terra, borderRadius: 3, opacity: .85 }} /> liquid</span>
-              <span style={{ color: C.soft }}>· {s.invReturn}% return{band ? ` ±${s.retBand}` : ""}</span>
-              {s.realDollars && <span style={{ color: C.sage, fontWeight: 600 }}>· today's $</span>}
+            <div className="sp-legend">
+              <span className="sp-key"><i style={{ background: C.sage }} /> retirement</span>
+              <span className="sp-key"><i style={{ background: C.terra }} /> liquid</span>
+              <span>· {s.invReturn}% return{band ? ` ±${s.retBand}` : ""}</span>
+              {s.realDollars && <span style={{ color: C.sage }}>· today's $</span>}
             </div>
           </div>
 
@@ -625,7 +1226,7 @@
               hint={s.yourCap > 0 ? "Your base stops growing once it reaches this" : "0 = no cap"} />
             <Slider label="Her income cap" value={s.herCap} setValue={set("herCap")} min={0} max={400000} step={10000} prefix="$" tint={C.sage}
               hint={s.herCap > 0 ? "Her salary stops growing once it reaches this" : "0 = no cap"} />
-            <div style={{ fontSize: 11.5, color: C.soft, margin: "-2px 0 6px" }}>Growth compounds yearly off the prior value — unless a raise below pins an exact number or changes the rate from a given year. Caps hold the salary flat once hit.</div>
+            <div className="sp-note" style={{ margin: "-4px 0 6px" }}>Growth compounds yearly off the prior value — unless a raise below pins an exact number or changes the rate from a given year. Caps hold the salary flat once hit.</div>
           </Section>
 
           <Section title="Retirement contributions" delay=".145s">
@@ -634,40 +1235,39 @@
             <Slider label="Your employer match" value={s.yourMatchPct} setValue={set("yourMatchPct")} min={0} max={12} step={0.5} suffix="% of base" tint={C.sage} />
             <Slider label="Her 401(k) deferral" value={s.her401kPct} setValue={set("her401kPct")} min={0} max={25} step={0.5} suffix="% of salary" tint={C.sage} />
             <Slider label="Her employer match" value={s.herMatchPct} setValue={set("herMatchPct")} min={0} max={12} step={0.5} suffix="% of salary" tint={C.sage} />
-            <div style={{ fontSize: 11.5, color: C.soft, margin: "-2px 0 6px" }}>Deferral + match + ESOP per person is still capped at the §415(c) annual-additions limit.</div>
+            <div className="sp-note" style={{ margin: "-4px 0 6px" }}>Deferral + match + ESOP per person is still capped at the §415(c) annual-additions limit.</div>
           </Section>
 
           <Section title="Raises &amp; overrides" delay=".15s"
-            right={<button onClick={addOverride} style={{ fontSize: 11, color: C.terra, background: "none", border: `1px solid #e3c6b4`, borderRadius: 20, padding: "4px 13px", cursor: "pointer", fontWeight: 600, letterSpacing: ".03em" }}>+ Add raise</button>}>
+            right={<button onClick={addOverride} className="sp-btn sp-btn--primary">+ Add raise</button>}>
             {ovs.length === 0 && (
-              <div style={{ fontSize: 12.5, color: C.soft, lineHeight: 1.5, marginBottom: 4 }}>
+              <div className="sp-note" style={{ fontSize: 12, marginBottom: 4 }}>
                 No raises pinned. Add one to set an exact income in a given year (e.g. a promotion) — growth re-bases off that number for every later year, until the next raise. You can also pin a new growth/yr rate from a given year onward.
               </div>
             )}
             {ovs.map((o) => {
               const meta = OV_FIELDS[o.field] || OV_FIELDS.base;
               return (
-                <div key={o.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "8px 0", borderBottom: "1px solid #efe7d7" }}>
-                  <span style={{ fontSize: 11, color: C.mute, fontWeight: 600 }}>Yr</span>
+                <div key={o.id} className="sp-ov">
+                  <span className="sp-ov-yr">Yr</span>
                   <NumInput value={o.year} onCommit={(v) => updOverride(o.id, "year", v)} min={1} max={s.years}
-                    align="center" style={{ fontSize: 15 }} />
-                  <select value={o.field} onChange={(e) => changeField(o, e.target.value)}
-                    style={{ fontFamily: "inherit", fontSize: 12.5, fontWeight: 600, color: C.ink, background: "#f6efe2", border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 8px", cursor: "pointer", outline: "none" }}>
+                    align="center" style={{ fontSize: 16 }} />
+                  <select value={o.field} onChange={(e) => changeField(o, e.target.value)} className="sp-select">
                     {Object.keys(OV_FIELDS).map((k) => <option key={k} value={k}>{OV_FIELDS[k].label}</option>)}
                   </select>
-                  <span style={{ display: "inline-flex", alignItems: "baseline", marginLeft: "auto", fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 16, color: C.ink, whiteSpace: "nowrap" }}>
-                    {!meta.pct && <span>$</span>}
+                  <span className="sp-val sp-ov-val">
+                    {!meta.pct && <span className="sp-unit">$</span>}
                     <NumInput value={o.value} onCommit={(v) => updOverride(o.id, "value", v)} min={0}
                       max={meta.pct ? (meta.max || 100) : undefined} decimals={meta.pct} style={{ fontSize: 16 }} />
-                    {meta.pct && <span style={{ color: C.mute, fontSize: 13, marginLeft: 1 }}>%</span>}
+                    {meta.pct && <span className="sp-unit sp-suffix">%</span>}
                   </span>
-                  <button onClick={() => delOverride(o.id)} aria-label="remove" style={{ border: "none", background: "none", color: C.soft, cursor: "pointer", fontSize: 18, lineHeight: 1, padding: "0 2px" }}>×</button>
+                  <button onClick={() => delOverride(o.id)} aria-label="remove" className="sp-x">×</button>
                 </div>
               );
             })}
             {ovs.length > 0 && (
-              <div style={{ fontSize: 11, color: C.soft, lineHeight: 1.5, marginTop: 8 }}>
-                A $ raise re-bases growth from that year; a % (bonus) holds until the next pin; a growth/yr change resets the compounding rate from that year onward. Pinned years are marked <span style={{ color: C.terra, fontWeight: 700 }}>•</span> in the table below.
+              <div className="sp-note" style={{ marginTop: 12 }}>
+                A $ raise re-bases growth from that year; a % (bonus) holds until the next pin; a growth/yr change resets the compounding rate from that year onward. Pinned years are marked <span className="sp-pin">•</span> in the table below.
               </div>
             )}
           </Section>
@@ -690,7 +1290,7 @@
             <Slider label="Inflation (indexes tax & limits)" value={s.infl} setValue={set("infl")} min={0} max={6} step={0.1} suffix="%" tint={C.brass} />
             <Slider label="Years to project" value={s.years} setValue={set("years")} min={1} max={30} step={1} suffix="yrs" />
             <Toggle label="Show balances in" value={s.realDollars} setValue={set("realDollars")} on="Today's $" off="Nominal $" />
-            <div style={{ fontSize: 11.5, color: C.soft, margin: "-6px 0 6px" }}>
+            <div className="sp-note" style={{ margin: "-8px 0 6px" }}>
               {s.realDollars
                 ? `Every figure is deflated to today's buying power at your ${s.infl}% inflation rate.`
                 : "Nominal — future dollars at face value. Switch to today's $ to see real buying power."}
@@ -698,16 +1298,16 @@
           </Section>
 
           <Section title="Base income · mortgage capacity" delay=".19s">
-            <div style={{ display: "flex", gap: 9, marginBottom: 14 }}>
-              <div style={{ flex: 1, background: "#f6efe2", borderRadius: 12, padding: "9px 13px", borderLeft: `3px solid ${C.brass}` }}>
-                <div style={{ fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>Qualifying · Yr 1</div>
-                <div style={{ fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 20, color: C.ink }}>{fmt(m1.qualInc)}</div>
-                <div style={{ fontSize: 10.5, color: C.soft }}>{s.inclBonus ? "base + bonus" : "base only"}</div>
+            <div className="sp-tiles">
+              <div className="sp-tile" style={{ "--mark": C.brass }}>
+                <div className="sp-tile-label">Qualifying · Yr 1</div>
+                <div className="sp-tile-num">{fmt(m1.qualInc)}</div>
+                <div className="sp-tile-sub">{s.inclBonus ? "base + bonus" : "base only"}</div>
               </div>
-              <div style={{ flex: 1, background: "#f6efe2", borderRadius: 12, padding: "9px 13px", borderLeft: `3px solid ${C.terra}` }}>
-                <div style={{ fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", color: C.mute, fontWeight: 600 }}>Max PITI / mo{m1.pitiCapped ? " · capped" : ""}</div>
-                <div style={{ fontFamily: "Fraunces,serif", fontWeight: 600, fontSize: 20, color: C.terra }}>{fmt(m1.maxPITI)}</div>
-                <div style={{ fontSize: 10.5, color: C.soft }}>{fmtC(m1.pi)} P&amp;I + {fmtC(m1.ti)} tax/ins{m1.pmiMo > 0 ? ` + ${fmtC(m1.pmiMo)} PMI` : ""}</div>
+              <div className="sp-tile" style={{ "--mark": C.terra }}>
+                <div className="sp-tile-label">Max PITI / mo{m1.pitiCapped ? " · capped" : ""}</div>
+                <div className="sp-tile-num" style={{ color: C.terra }}>{fmt(m1.maxPITI)}</div>
+                <div className="sp-tile-sub">{fmtC(m1.pi)} P&amp;I + {fmtC(m1.ti)} tax/ins{m1.pmiMo > 0 ? ` + ${fmtC(m1.pmiMo)} PMI` : ""}</div>
               </div>
             </div>
             <Toggle label="Count bonus as income" value={s.inclBonus} setValue={set("inclBonus")} on="With bonus" off="Base only" />
@@ -720,36 +1320,36 @@
             <Slider label="PMI rate (if under 20%)" value={s.pmiRate} setValue={set("pmiRate")} min={0} max={1.5} step={0.05} suffix="% of loan / yr" tint={C.brass} />
             <Slider label="Closing costs" value={s.closeCost} setValue={set("closeCost")} min={0} max={6} step={0.25} suffix="% of price" tint={C.brass} />
             <Slider label="Emergency fund to keep" value={s.emFund} setValue={set("emFund")} min={0} max={250000} step={5000} prefix="$" tint={C.sage} />
-            <div style={{ background: C.ink, color: "#f6efe2", borderRadius: 14, padding: "13px 16px", margin: "4px 0 8px" }}>
-              <div style={{ fontSize: 11, letterSpacing: ".1em", textTransform: "uppercase", opacity: .65, fontWeight: 600 }}>Affordable by year {s.years}</div>
-              <div style={{ fontFamily: "Fraunces,serif", fontWeight: 700, fontSize: 30, lineHeight: 1.05, margin: "2px 0 4px" }}>{fmtC(eY.affordHome)}</div>
-              <div style={{ fontSize: 12.5, opacity: .85 }}>
+            <div className="sp-afford">
+              <div className="sp-label">Affordable by year {s.years}</div>
+              <div className="sp-afford-num">{fmtC(eY.affordHome)}</div>
+              <div className="sp-afford-sub">
                 {fmtC(eY.down)} down ({(eY.downPct * 100).toFixed(0)}%) + {fmtC(eY.loan)} loan
                 {eY.closing > 0 && <span> · {fmtC(eY.closing)} closing</span>}
-                {eY.pmiZone && <span style={{ color: "#f0b89e" }}> · {fmtC(eY.pmiMo)}/mo PMI</span>}
+                {eY.pmiZone && <span style={{ color: C.warn }}> · {fmtC(eY.pmiMo)}/mo PMI</span>}
               </div>
             </div>
-            <div style={{ fontSize: 11, color: C.soft, lineHeight: 1.5 }}>Assumes all liquid above your {fmtC(s.emFund)} emergency fund goes toward the purchase — closing costs ({s.closeCost}% of price) come out first, the rest is your down payment — then you borrow the most income supports (full PITI within {s.feRatio}%{s.pitiCap > 0 ? `, but never above your ${fmtC(s.pitiCap)}/mo cap` : ""}, with PMI added when down is under 20%). Retirement/ESOP aren't counted toward the down payment; HOA isn't included. A lender pre-approval is the real test.</div>
+            <div className="sp-note">Assumes all liquid above your {fmtC(s.emFund)} emergency fund goes toward the purchase — closing costs ({s.closeCost}% of price) come out first, the rest is your down payment — then you borrow the most income supports (full PITI within {s.feRatio}%{s.pitiCap > 0 ? `, but never above your ${fmtC(s.pitiCap)}/mo cap` : ""}, with PMI added when down is under 20%). Retirement/ESOP aren't counted toward the down payment; HOA isn't included. A lender pre-approval is the real test.</div>
           </Section>
 
           <Section title="Year by year" delay=".2s"
-            right={<div style={{ display: "flex", gap: 7 }}>
-              <button onClick={saveTableImage} style={{ fontSize: 11, color: C.sage, background: "none", border: `1px solid #cfe0d4`, borderRadius: 20, padding: "4px 13px", cursor: "pointer", fontWeight: 600, letterSpacing: ".03em" }}>↓ Save image</button>
-              <button onClick={reset} style={{ fontSize: 11, color: C.terra, background: "none", border: `1px solid #e3c6b4`, borderRadius: 20, padding: "4px 13px", cursor: "pointer", fontWeight: 600, letterSpacing: ".03em" }}>Reset all</button>
+            right={<div className="sp-actions">
+              <button onClick={saveTableImage} className="sp-btn">↓ Save image</button>
+              <button onClick={reset} className="sp-btn sp-btn--bad">Reset all</button>
             </div>}>
-            <div style={{ overflowX: "auto", borderRadius: 12, border: `1px solid ${C.border}`, margin: "0 0 8px" }}>
-              <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 1100, fontSize: 11.5, fontVariantNumeric: "tabular-nums" }}>
+            <div className="sp-table-wrap">
+              <table className="sp-table">
                 <thead>
-                  <tr style={{ background: C.ink, color: "#f6efe2" }}>
-                    <th rowSpan={2} style={{ padding: "8px 9px", textAlign: "left", fontWeight: 600, verticalAlign: "bottom", letterSpacing: ".02em" }}>Yr</th>
+                  <tr>
+                    <th rowSpan={2} style={{ padding: "8px 9px", textAlign: "left", fontWeight: 500, verticalAlign: "bottom", letterSpacing: ".06em", textTransform: "uppercase", fontSize: 10.5 }}>Yr</th>
                     <th colSpan={3} style={grp(C.brass)}>Income</th>
                     <th colSpan={3} style={grp(C.terra, true)}>Taxes</th>
-                    <th rowSpan={2} style={{ padding: "8px 9px", textAlign: "right", fontWeight: 600, verticalAlign: "bottom", whiteSpace: "nowrap", borderLeft: HDIV }}>Spending</th>
+                    <th rowSpan={2} style={{ padding: "8px 9px", textAlign: "right", fontWeight: 500, verticalAlign: "bottom", whiteSpace: "nowrap", borderLeft: HDIV, letterSpacing: ".06em", textTransform: "uppercase", fontSize: 10.5 }}>Spending</th>
                     <th colSpan={3} style={grp(C.sage, true)}>Savings</th>
                     <th colSpan={3} style={grp(C.terra, true)}>Balance</th>
                     <th colSpan={2} style={grp(C.brass, true)}>Housing</th>
                   </tr>
-                  <tr style={{ background: "#2c2820", color: "#cdbfa6" }}>
+                  <tr style={{ color: C.mute }}>
                     <th style={sub()}>You</th><th style={sub()}>Her</th><th style={sub()}>Total</th>
                     <th style={sub(true)}>You</th><th style={sub()}>Her</th><th style={sub()}>Total</th>
                     <th style={sub(true)}>Liquid</th><th style={sub()}>Retire</th><th style={sub()}>Total</th>
@@ -759,32 +1359,32 @@
                 </thead>
                 <tbody>
                   {proj.map((d, i) => (
-                    <tr key={d.yr} style={{ background: i % 2 ? "#faf5ea" : "#fffdf8" }}>
+                    <tr key={d.yr} style={{ background: i % 2 ? "var(--surface)" : "var(--ground)" }}>
                       <td style={{ padding: "7px 9px", fontWeight: 700, color: C.brass, whiteSpace: "nowrap" }} title={d.pinNote || undefined}>{d.yr}{d.pinned && <span style={{ color: C.terra }}> •</span>}</td>
                       <td style={bc()}>{fmtC(d.yourInc)}</td>
                       <td style={bc()}>{fmtC(d.herInc)}</td>
                       <td style={bc({ fontWeight: 700, color: C.ink })}>{fmtC(d.gross)}</td>
                       <td style={bc({ color: C.soft }, true)}>{fmtC(d.yourTax)}</td>
                       <td style={bc({ color: C.soft })}>{fmtC(d.herTax)}</td>
-                      <td style={bc({ color: "#7a6f5e", fontWeight: 700 })}>{fmtC(d.tax)}</td>
+                      <td style={bc({ color: C.ink2, fontWeight: 700 })}>{fmtC(d.tax)}</td>
                       <td style={bc({}, true)}>{fmtC(d.spending)}</td>
-                      <td style={bc({ color: d.liqSaved < 0 ? "#a23a1e" : "#3c352c", fontWeight: 600 }, true)}>{fmtC(d.liqSaved)}</td>
+                      <td style={bc({ color: d.liqSaved < 0 ? C.bad : C.ink2, fontWeight: 600 }, true)}>{fmtC(d.liqSaved)}</td>
                       <td style={bc({ color: C.sage, fontWeight: 600 })}>{fmtC(d.retSaved)}</td>
                       <td style={bc({ fontWeight: 700, color: C.ink })}>{fmtC(d.savedTot)}</td>
                       <td style={bc({ color: C.mute }, true)}>{fmtC(d.liqBalY)}</td>
                       <td style={bc({ color: C.sage })}>{fmtC(d.retBalY)}</td>
                       <td style={bc({ color: C.terra, fontWeight: 700 })}>{fmtC(d.bal)}</td>
                       <td style={bc({ color: C.ink }, true)}>{fmtC(d.maxPITI)}</td>
-                      <td style={bc({ fontWeight: 700, color: d.pmiZone ? C.terra : C.sage })} title={d.pmiZone ? `down ${(d.downPct * 100).toFixed(0)}% — under 20%, PMI likely` : `down ${(d.downPct * 100).toFixed(0)}%`}>{fmtC(d.affordHome)}</td>
+                      <td style={bc({ fontWeight: 700, color: d.pmiZone ? C.warn : C.sage })} title={d.pmiZone ? `down ${(d.downPct * 100).toFixed(0)}% — under 20%, PMI likely` : `down ${(d.downPct * 100).toFixed(0)}%`}>{fmtC(d.affordHome)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div style={{ fontSize: 11, color: C.soft }}>Scroll sideways for all groups. <b>Income</b> &amp; <b>Taxes</b> are split per person, then totaled. <b>Savings</b> = what you add that year (liquid + retirement); <b>Balance</b> = running total after that year's growth and contributions. <b>PITI/mo</b> = full housing payment income supports; <b>Afford</b> = home you can buy that year (all liquid above the e-fund as down + income-supported loan) — <span style={{ color: C.sage, fontWeight: 600 }}>green</span> = 20%+ down, <span style={{ color: C.terra, fontWeight: 600 }}>orange</span> = under 20%, PMI included. Tip: tap any input above to type an exact number.</div>
+            <div className="sp-note">Scroll sideways for all groups. <b>Income</b> &amp; <b>Taxes</b> are split per person, then totaled. <b>Savings</b> = what you add that year (liquid + retirement); <b>Balance</b> = running total after that year's growth and contributions. <b>PITI/mo</b> = full housing payment income supports; <b>Afford</b> = home you can buy that year (all liquid above the e-fund as down + income-supported loan) — <span style={{ color: C.sage, fontWeight: 500 }}>green</span> = 20%+ down, <span style={{ color: C.warn, fontWeight: 500 }}>orange</span> = under 20%, PMI included. Tip: tap any input above to type an exact number.</div>
           </Section>
 
-          <div style={{ fontSize: 11, color: C.soft, lineHeight: 1.55, padding: "4px 4px 0" }}>
+          <div className="sp-foot">
             Tax engine uses verified 2026 figures: IRS Rev. Proc. 2025-32 federal brackets, $16,100 standard deduction, $184,500 Social Security wage base, 1.45% + 0.9% Medicare, and $24,500 401(k) / $7,500 IRA / $72,000 §415(c) annual-additions limits — plus California's latest FTB single brackets, $5,706 standard deduction, and 1.3% SDI (no cap). Each spouse files single. Brackets and limits index by your inflation rate across the projection, so there's no artificial bracket creep. Each person's combined 401(k) deferral + employer match + ESOP is capped at the §415(c) limit; ESOP above it isn't contributed (not modeled as cash). Raises pinned in a given year override the smooth growth curve — a $ pin re-bases compounding from that year, a % (bonus) pin holds until the next pin, and a growth/yr pin changes the compounding rate from that year onward. Optional per-person income caps hold a salary flat once it reaches the ceiling. The liquid bucket compounds at an after-tax return (your tax-drag haircut on dividends &amp; realized gains); retirement compounds tax-deferred. Switch the projection to <b>today's dollars</b> to deflate every figure to current buying power, and set a <b>return band</b> to shade a ± scenario range around your point estimate. Not modeled: itemized deductions (e.g. mortgage interest & property tax once you own), pre-tax benefits like health premiums or HSA, catch-up contributions, and exact 2026 CA brackets (FTB finalizes those later). Inputs auto-save here but don't carry into a separate chat. Planning math — your actual tax return and a lender pre-approval are the real tests.
           </div>
         </div>

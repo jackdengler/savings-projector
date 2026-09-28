@@ -34,3 +34,15 @@ Inputs auto-save through `window.storage`. Inside the PWA shell the host
 injects `window.storage`, which persists to the private `private-data-storage`
 repository under the key `savings_inputs_v2`. When opened standalone, the page
 falls back to `localStorage` so it still remembers your inputs.
+
+## Look
+
+Central Optimus palette + type (Anton / DM Mono, self-hosted in `fonts/`),
+matching the launcher and its sibling apps. Colours are tokens in `:root`
+(dark, the default) with `:root[data-theme="light"]` overrides; the inline
+styles and the "Big Type skin" CSS in `index.html` only reference those tokens.
+The theme is the shared `co.theme` localStorage key ("dark" | "light"), applied
+by the head script before first paint and kept in step with the launcher via the
+`storage` event; the sun/moon button in the header toggles it. Savings amber
+(`--brand`, #b7791f) marks "this app" (hero band, small markers); yellow marks
+"selected / do this".
