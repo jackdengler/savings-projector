@@ -695,7 +695,7 @@
     function computeYear(p, yr) {
       const eg = Math.pow(1 + p.expGrow / 100, yr - 1);
       const f = Math.pow(1 + (p.infl || 0) / 100, yr - 1); // indexes brackets, deductions & contribution limits
-      const your401k = Math.min(p.your401kAmt ?? YOUR_401K, YOUR_401K) * f, ira = IRA * f, cap415 = LIMIT_415C * f;
+      const deferLimit = YOUR_401K * f, your401k = Math.min(p.your401kAmt ?? YOUR_401K, YOUR_401K) * f, ira = IRA * f, cap415 = LIMIT_415C * f;
 
       // resolve each field through any per-year pins (overrides)
       const ov = p.overrides || [];
@@ -710,7 +710,7 @@
 
       const bonus = base * (bonusPct / 100), herBonus = herSal * (herBonusPct / 100);
       const yourWages = base + bonus, herWages = herSal + herBonus;
-      const her401k = herSal * ((p.her401kPct ?? 3) / 100), yourMatch = base * ((p.yourMatchPct ?? 4) / 100), herMatch = herSal * ((p.herMatchPct ?? 3) / 100); // contributions/match as % of salary
+      const her401k = Math.min(herSal * ((p.her401kPct ?? 3) / 100), deferLimit), yourMatch = base * ((p.yourMatchPct ?? 4) / 100), herMatch = herSal * ((p.herMatchPct ?? 3) / 100); // contributions/match as % of salary
       const yourTax = personTax(yourWages, your401k, f), herTax = personTax(herWages, her401k, f);
       const takeHome = (yourWages - your401k - yourTax) + (herWages - her401k - herTax);
       const fixed = p.fixedMo * 12 * eg, variable = p.varMo * 12 * eg, big = p.big * eg;
@@ -751,7 +751,7 @@
     // Editable number field: shows thousands-commas at rest, lets you type freely
     // (empty/partial allowed, no snapping to 0), commits live while it parses,
     // and clamps to min/max only on blur so it never "maxes out" mid-type.
-    function NumInput({ value, onCommit, min, max, decimals, align, style }) {
+    function NumInput({ value, onCommit, min, max, decimals, align, style, label }) {
       const [focused, setFocused] = useState(false);
       const [draft, setDraft] = useState("");
       const display = focused ? draft : Number(value).toLocaleString("en-US", { maximumFractionDigits: 3 });
@@ -765,7 +765,7 @@
         onCommit(n);
       };
       return (
-        <input type="text" inputMode={decimals ? "decimal" : "numeric"} value={display}
+        <input type="text" inputMode={decimals ? "decimal" : "numeric"} value={display} aria-label={label}
           onFocus={(e) => { setFocused(true); setDraft(String(value)); requestAnimationFrame(() => e.target.select()); }}
           onChange={(e) => {
             const cleaned = e.target.value.replace(decimals ? /[^0-9.]/g : /[^0-9]/g, "");
@@ -789,12 +789,12 @@
             <span className="sp-label">{label}</span>
             <span className="sp-val">
               {prefix && <span className="sp-unit">{prefix}</span>}
-              <NumInput value={value} onCommit={setValue} min={0} decimals={!Number.isInteger(step)}
+              <NumInput value={value} onCommit={setValue} min={0} decimals={!Number.isInteger(step)} label={label}
                 style={{ fontSize: 17, minWidth: "2ch", padding: "0 1px 1px" }} />
               {suffix && <span className="sp-unit sp-suffix">{suffix}</span>}
             </span>
           </div>
-          <input type="range" className="sp-range" min={min} max={max} step={step} value={Math.min(Math.max(value, min), max)}
+          <input type="range" className="sp-range" aria-label={label} min={min} max={max} step={step} value={Math.min(Math.max(value, min), max)}
             onChange={(e) => setValue(Number(e.target.value))}
             style={{ background: `linear-gradient(90deg,var(--range-fill) ${pct}%,var(--range-track) ${pct}%)` }} />
           {hint && <div className="sp-hint">{hint}</div>}
@@ -909,6 +909,7 @@
       };
 
       const p = { ...s };
+      const years = Math.max(1, Math.round(s.years) || 1); // a cleared/typed-0 field must never empty the projection
       const y1 = computeYear(p, 1);
       const negative = y1.liquid < 0;
 
@@ -923,7 +924,7 @@
 
       const proj = [];
       let retBal = s.startRet, liqBal = s.startLiq, contrib = s.startRet + s.startLiq;
-      for (let yr = 1; yr <= s.years; yr++) {
+      for (let yr = 1; yr <= years; yr++) {
         const cy = computeYear(p, yr);
         retBal = retBal * (1 + s.invReturn / 100) + cy.retirement;
         liqBal = liqBal * (1 + liqReturn(s.invReturn)) + cy.liquid;
@@ -1071,7 +1072,7 @@
         svg += `<rect width="${totalW}" height="${totalH}" fill="${X.ground}"/>`;
         svg += `<rect width="${totalW}" height="6" fill="${X.brand}"/>`;
         svg += `<text x="${padL}" y="${padT + 24}" font-size="20" font-weight="700" fill="${X.ink}">Savings &amp; Growth — year by year</text>`;
-        const cap = `${s.years}-yr projection · ${s.invReturn}% return${s.retBand > 0 ? ` ±${s.retBand}` : ""} · ${s.realDollars ? "today's dollars" : "nominal dollars"}`;
+        const cap = `${years}-yr projection · ${s.invReturn}% return${s.retBand > 0 ? ` ±${s.retBand}` : ""} · ${s.realDollars ? "today's dollars" : "nominal dollars"}`;
         svg += `<text x="${padL}" y="${padT + 46}" font-size="12.5" fill="${X.muted}">${esc(cap)}</text>`;
         svg += `<rect x="0" y="${headTop}" width="${totalW}" height="${gH + sH}" fill="${X.surface}"/>`;
         svg += `<rect x="0" y="${headTop + gH - 1}" width="${totalW}" height="1" fill="${X.line}"/>`;
@@ -1158,7 +1159,7 @@
           {/* Projection */}
           <div className="sp-proj rise" style={{ animationDelay: ".1s" }}>
             <div className="sp-proj-head">
-              <div className="sp-label">Projected · year {s.years}{s.realDollars ? " · today's $" : ""}</div>
+              <div className="sp-label">Projected · year {years}{s.realDollars ? " · today's $" : ""}</div>
               <div className="sp-proj-sub">{fmtC(totalContrib)} in · <span style={{ color: C.sage, fontWeight: 500 }}>{fmtC(growth)} growth</span></div>
             </div>
             <div className="sp-bignum">{fmtC(endBal)}</div>
@@ -1201,7 +1202,7 @@
               <circle cx={last.x} cy={last.y} r="4.5" style={{ fill: C.terra, stroke: C.paper }} strokeWidth="2" />
             </svg>
             <div className="sp-axis">
-              <span>Yr 1</span><span>Yr {Math.ceil(s.years / 2)}</span><span>Yr {s.years}</span>
+              <span>Yr 1</span><span>Yr {Math.ceil(years / 2)}</span><span>Yr {years}</span>
             </div>
             <div className="sp-legend">
               <span className="sp-key"><i style={{ background: C.sage }} /> retirement</span>
@@ -1250,18 +1251,18 @@
               return (
                 <div key={o.id} className="sp-ov">
                   <span className="sp-ov-yr">Yr</span>
-                  <NumInput value={o.year} onCommit={(v) => updOverride(o.id, "year", v)} min={1} max={s.years}
+                  <NumInput value={o.year} label="Year" onCommit={(v) => updOverride(o.id, "year", v)} min={1} max={years}
                     align="center" style={{ fontSize: 16 }} />
-                  <select value={o.field} onChange={(e) => changeField(o, e.target.value)} className="sp-select">
+                  <select value={o.field} onChange={(e) => changeField(o, e.target.value)} className="sp-select" aria-label="Field">
                     {Object.keys(OV_FIELDS).map((k) => <option key={k} value={k}>{OV_FIELDS[k].label}</option>)}
                   </select>
                   <span className="sp-val sp-ov-val">
                     {!meta.pct && <span className="sp-unit">$</span>}
-                    <NumInput value={o.value} onCommit={(v) => updOverride(o.id, "value", v)} min={0}
+                    <NumInput value={o.value} label="Value" onCommit={(v) => updOverride(o.id, "value", v)} min={0}
                       max={meta.pct ? (meta.max || 100) : undefined} decimals={meta.pct} style={{ fontSize: 16 }} />
                     {meta.pct && <span className="sp-unit sp-suffix">%</span>}
                   </span>
-                  <button onClick={() => delOverride(o.id)} aria-label="remove" className="sp-x">×</button>
+                  <button onClick={() => delOverride(o.id)} aria-label="Remove raise" className="sp-x">×</button>
                 </div>
               );
             })}
@@ -1321,7 +1322,7 @@
             <Slider label="Closing costs" value={s.closeCost} setValue={set("closeCost")} min={0} max={6} step={0.25} suffix="% of price" tint={C.brass} />
             <Slider label="Emergency fund to keep" value={s.emFund} setValue={set("emFund")} min={0} max={250000} step={5000} prefix="$" tint={C.sage} />
             <div className="sp-afford">
-              <div className="sp-label">Affordable by year {s.years}</div>
+              <div className="sp-label">Affordable by year {years}</div>
               <div className="sp-afford-num">{fmtC(eY.affordHome)}</div>
               <div className="sp-afford-sub">
                 {fmtC(eY.down)} down ({(eY.downPct * 100).toFixed(0)}%) + {fmtC(eY.loan)} loan
